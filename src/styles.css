@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: #06101d;
+    color: #fff;
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .field {
+    @apply w-full rounded-md border border-line bg-ink px-3 py-2.5 text-white outline-none transition placeholder:text-slate-600 focus:border-fitblue focus:ring-2 focus:ring-fitblue/20;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md bg-fitgreen px-4 py-2.5 text-sm font-bold text-ink transition hover:brightness-110 active:scale-[0.99];
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white/5 px-4 py-2.5 text-sm font-bold text-white transition hover:border-fitblue;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-fitorange/40 bg-fitorange/10 px-4 py-2.5 text-sm font-bold text-fitorange transition hover:bg-fitorange hover:text-ink;
+  }
+
+  .icon-btn {
+    @apply grid h-10 w-10 place-items-center rounded-md border border-line bg-panel text-slate-200 transition hover:border-fitblue hover:text-fitblue;
+  }
+
+  .chip {
+    @apply rounded-full border border-line bg-ink/50 px-3 py-1.5 text-sm text-slate-300 transition hover:border-fitblue;
+  }
+
+  .chip-active {
+    @apply rounded-full border border-fitgreen bg-fitgreen px-3 py-1.5 text-sm font-bold text-ink;
+  }
+
+  .scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #1d2b3d transparent;
+  }
+}
