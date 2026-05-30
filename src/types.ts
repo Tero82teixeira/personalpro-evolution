@@ -37,6 +37,7 @@ export interface Student {
 export interface PhysicalAssessment {
   id: string;
   studentId: string;
+  assessmentDate?: string;
   date: string;
   weight: number;
   height: number;
@@ -107,12 +108,32 @@ export interface Workout {
   completed: boolean;
 }
 
+export interface WorkoutLog {
+  id: string;
+  workoutId: string;
+  studentId: string;
+  profileId?: string;
+  completedAt: string;
+  status: 'concluido';
+  notes?: string;
+}
+
+export interface PeriodizationPhase {
+  title: string;
+  weeks: string;
+  objective: string;
+  description: string;
+}
+
 export interface Periodization {
   id: string;
   studentId: string;
   weeks: 4 | 8 | 12;
-  phases: string[];
+  phases: PeriodizationPhase[];
   startDate: string;
+  status: 'ativo' | 'inativo';
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface CheckIn {
@@ -164,6 +185,7 @@ export interface AppData {
   assessments: PhysicalAssessment[];
   anamneses: Anamnesis[];
   workouts: Workout[];
+  workoutLogs: WorkoutLog[];
   periodizations: Periodization[];
   checkIns: CheckIn[];
   payments: Payment[];

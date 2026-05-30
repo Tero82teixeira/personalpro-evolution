@@ -12,29 +12,12 @@ export function loadData(): AppData {
     saveData(seedData);
     return seedData;
   }
-  return JSON.parse(stored) as AppData;
+  const parsed = JSON.parse(stored) as Partial<AppData>;
+  return { ...seedData, ...parsed, workoutLogs: parsed.workoutLogs ?? [] } as AppData;
 }
 
 export function saveData(data: AppData) {
   localStorage.setItem(DATA_KEY, JSON.stringify(data));
-}
-
-export function cleanDemoData(): AppData {
-  const adminUsers = seedData.users.filter((user) => user.role === 'admin');
-  const cleanData: AppData = {
-    users: adminUsers,
-    students: [],
-    assessments: [],
-    anamneses: [],
-    workouts: [],
-    periodizations: [],
-    checkIns: [],
-    payments: [],
-    messages: seedData.messages,
-    marketingIdeas: seedData.marketingIdeas
-  };
-  saveData(cleanData);
-  return cleanData;
 }
 
 export function loadSession(): string | null {

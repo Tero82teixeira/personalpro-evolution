@@ -138,8 +138,23 @@ create table if not exists workout_logs (
   id uuid primary key default gen_random_uuid(),
   workout_id uuid not null references workouts(id) on delete cascade,
   student_id uuid not null references students(id) on delete cascade,
+  profile_id uuid references profiles(id) on delete set null,
   completed_at timestamptz not null default now(),
+  status text not null default 'concluido' check (status in ('concluido')),
   notes text
+);
+
+alter table workout_logs add column if not exists profile_id uuid references profiles(id) on delete set null;
+alter table workout_logs add column if not exists status text not null default 'concluido' check (status in ('concluido'));
+
+create table if not exists periodizations (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references students(id) on delete cascade,
+  duration_weeks int not null check (duration_weeks in (4, 8, 12)),
+  phases jsonb not null default '[]'::jsonb,
+  status text not null default 'ativo' check (status in ('ativo', 'inativo')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists checkins (
@@ -268,6 +283,7 @@ alter table anamnesis enable row level security;
 alter table workouts enable row level security;
 alter table workout_exercises enable row level security;
 alter table workout_logs enable row level security;
+alter table periodizations enable row level security;
 alter table checkins enable row level security;
 alter table financial_records enable row level security;
 alter table message_templates enable row level security;
@@ -313,6 +329,11 @@ drop policy if exists "workout_logs_select" on workout_logs;
 create policy "workout_logs_select" on workout_logs for select using (is_admin() or owns_student(student_id));
 drop policy if exists "workout_logs_student_insert" on workout_logs;
 create policy "workout_logs_student_insert" on workout_logs for insert with check (owns_student(student_id));
+
+drop policy if exists "periodizations_select" on periodizations;
+create policy "periodizations_select" on periodizations for select using (is_admin() or owns_student(student_id));
+drop policy if exists "periodizations_admin_all" on periodizations;
+create policy "periodizations_admin_all" on periodizations for all using (is_admin()) with check (is_admin());
 
 drop policy if exists "checkins_select" on checkins;
 create policy "checkins_select" on checkins for select using (is_admin() or owns_student(student_id));

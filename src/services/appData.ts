@@ -1,4 +1,4 @@
-import type { AppData, Anamnesis, CheckIn, Exercise, MarketingIdea, MessageTemplate, Payment, PhysicalAssessment, Student, User, Workout } from '../types';
+import type { AppData, Anamnesis, CheckIn, Exercise, MarketingIdea, MessageTemplate, Payment, Periodization, PhysicalAssessment, Student, User, Workout, WorkoutLog } from '../types';
 import { loadData } from './storage';
 import { requireSupabase } from './supabase/client';
 import { isSupabaseConfigured } from './supabase/config';
@@ -45,6 +45,41 @@ function pickStudentFullName(student: DbStudent, profile?: DbProfile) {
   return studentName || profileName || empty;
 }
 
+function dateOnly(value: unknown) {
+  return value ? String(value).slice(0, 10) : empty;
+}
+
+function numberValue(value: unknown) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function mapAssessmentFromSupabase(item: Record<string, any>): PhysicalAssessment {
+  const assessmentDate = dateOnly(item.assessment_date ?? item.assessmentDate ?? item.date ?? item.created_at);
+  return {
+    id: item.id,
+    studentId: item.student_id ?? item.studentId ?? item.student?.id ?? empty,
+    assessmentDate,
+    date: assessmentDate,
+    weight: numberValue(item.weight ?? item.peso),
+    height: numberValue(item.height ?? item.altura),
+    bodyFat: numberValue(item.body_fat ?? item.bodyFat ?? item.gordura),
+    leanMass: numberValue(item.lean_mass ?? item.leanMass),
+    fatMass: numberValue(item.fat_mass ?? item.fatMass),
+    abdomen: numberValue(item.abdomen),
+    waist: numberValue(item.waist),
+    hip: numberValue(item.hip),
+    rightArm: numberValue(item.right_arm ?? item.rightArm),
+    leftArm: numberValue(item.left_arm ?? item.leftArm),
+    rightThigh: numberValue(item.right_thigh ?? item.rightThigh),
+    leftThigh: numberValue(item.left_thigh ?? item.leftThigh),
+    rightCalf: numberValue(item.right_calf ?? item.rightCalf),
+    leftCalf: numberValue(item.left_calf ?? item.leftCalf),
+    photos: item.photos ?? [],
+    notes: item.notes ?? empty
+  };
+}
+
 export async function loadAppData(currentUser?: User | null): Promise<AppData> {
   if (!isSupabaseConfigured()) return loadData();
 
@@ -56,6 +91,8 @@ export async function loadAppData(currentUser?: User | null): Promise<AppData> {
     anamnesisResult,
     workoutsResult,
     exercisesResult,
+    workoutLogsResult,
+    periodizationsResult,
     checkinsResult,
     financialResult,
     messagesResult,
@@ -67,6 +104,8 @@ export async function loadAppData(currentUser?: User | null): Promise<AppData> {
     supabase.from('anamnesis').select('*'),
     supabase.from('workouts').select('*'),
     supabase.from('workout_exercises').select('*'),
+    supabase.from('workout_logs').select('*'),
+    supabase.from('periodizations').select('*'),
     supabase.from('checkins').select('*'),
     supabase.from('financial_records').select('*'),
     supabase.from('message_templates').select('*'),
@@ -80,6 +119,8 @@ export async function loadAppData(currentUser?: User | null): Promise<AppData> {
     anamnesisResult.error,
     workoutsResult.error,
     exercisesResult.error,
+    workoutLogsResult.error,
+    periodizationsResult.error,
     checkinsResult.error,
     financialResult.error,
     messagesResult.error,
@@ -135,27 +176,7 @@ export async function loadAppData(currentUser?: User | null): Promise<AppData> {
         avatar: item.avatar_url ?? undefined
       };
     }),
-    assessments: ((assessmentsResult.data ?? []) as Record<string, any>[]).map<PhysicalAssessment>((item) => ({
-      id: item.id,
-      studentId: item.student_id,
-      date: item.assessment_date,
-      weight: Number(item.weight ?? 0),
-      height: Number(item.height ?? 0),
-      bodyFat: Number(item.body_fat ?? 0),
-      leanMass: Number(item.lean_mass ?? 0),
-      fatMass: Number(item.fat_mass ?? 0),
-      abdomen: Number(item.abdomen ?? 0),
-      waist: Number(item.waist ?? 0),
-      hip: Number(item.hip ?? 0),
-      rightArm: Number(item.right_arm ?? 0),
-      leftArm: Number(item.left_arm ?? 0),
-      rightThigh: Number(item.right_thigh ?? 0),
-      leftThigh: Number(item.left_thigh ?? 0),
-      rightCalf: Number(item.right_calf ?? 0),
-      leftCalf: Number(item.left_calf ?? 0),
-      photos: item.photos ?? [],
-      notes: item.notes ?? empty
-    })),
+    assessments: ((assessmentsResult.data ?? []) as Record<string, any>[]).map(mapAssessmentFromSupabase),
     anamneses: ((anamnesisResult.data ?? []) as Record<string, any>[]).map<Anamnesis>((item) => ({
       id: item.id,
       studentId: item.student_id,
@@ -192,7 +213,25 @@ export async function loadAppData(currentUser?: User | null): Promise<AppData> {
       completed: Boolean(item.completed),
       exercises: exercises.filter((exercise) => (exercisesResult.data as Record<string, any>[]).find((raw) => raw.id === exercise.id)?.workout_id === item.id)
     })),
-    periodizations: [],
+    workoutLogs: ((workoutLogsResult.data ?? []) as Record<string, any>[]).map<WorkoutLog>((item) => ({
+      id: item.id,
+      workoutId: item.workout_id,
+      studentId: item.student_id,
+      profileId: item.profile_id ?? undefined,
+      completedAt: item.completed_at,
+      status: item.status ?? 'concluido',
+      notes: item.notes ?? undefined
+    })),
+    periodizations: ((periodizationsResult.data ?? []) as Record<string, any>[]).map<Periodization>((item) => ({
+      id: item.id,
+      studentId: item.student_id,
+      weeks: Number(item.duration_weeks ?? 4) as Periodization['weeks'],
+      phases: item.phases ?? [],
+      startDate: item.created_at ? String(item.created_at).slice(0, 10) : empty,
+      status: item.status ?? 'ativo',
+      createdAt: item.created_at ?? empty,
+      updatedAt: item.updated_at ?? undefined
+    })),
     checkIns: ((checkinsResult.data ?? []) as Record<string, any>[]).map<CheckIn>((item) => ({
       id: item.id,
       studentId: item.student_id,

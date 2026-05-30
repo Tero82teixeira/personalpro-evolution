@@ -17,22 +17,6 @@ Para gerar a versão de produção:
 npm run build
 ```
 
-## Logins de teste
-
-Personal/Admin:
-
-```text
-personal@demo.com
-123456
-```
-
-Aluno:
-
-```text
-aluno@demo.com
-123456
-```
-
 ## Configurar Supabase
 
 Copie o arquivo `.env.example` para `.env` e preencha:
@@ -169,7 +153,3 @@ No painel da Vercel, cadastre as variáveis em `Settings > Environment Variables
 O arquivo `.env` local não deve ser enviado ao repositório. Use `.env.example` apenas como modelo, sem valores reais.
 
 O projeto inclui `vercel.json` com fallback para `/index.html`, evitando erro 404 ao atualizar páginas ou acessar rotas internas diretamente.
-
-## Limpar dados demo
-
-Entre como personal, abra o Dashboard e clique em `Limpar dados demo`. O sistema pede confirmação e remove alunos, treinos, avaliações, check-ins e financeiro, mantendo o admin e os modelos de mensagens/marketing.

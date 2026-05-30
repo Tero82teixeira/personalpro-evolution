@@ -1,4 +1,4 @@
-import type { Anamnesis, CheckIn, Exercise, Payment, PhysicalAssessment, Student, Workout } from '../types';
+import type { Anamnesis, CheckIn, Exercise, Payment, Periodization, PhysicalAssessment, Student, Workout, WorkoutLog } from '../types';
 import { requireSupabase } from './supabase/client';
 import { isSupabaseConfigured } from './supabase/config';
 
@@ -35,6 +35,36 @@ function assessmentToRow(assessment: PhysicalAssessment) {
   };
 }
 
+function dateOnly(value: unknown) {
+  return value ? String(value).slice(0, 10) : new Date().toISOString().slice(0, 10);
+}
+
+function mapAssessmentFromSupabase(item: Record<string, any>): PhysicalAssessment {
+  const assessmentDate = dateOnly(item.assessment_date ?? item.assessmentDate ?? item.date ?? item.created_at);
+  return {
+    id: item.id,
+    studentId: item.student_id ?? item.studentId ?? item.student?.id ?? '',
+    assessmentDate,
+    date: assessmentDate,
+    weight: numberOrZero(item.weight ?? item.peso),
+    height: numberOrZero(item.height ?? item.altura),
+    bodyFat: numberOrZero(item.body_fat ?? item.bodyFat ?? item.gordura),
+    leanMass: numberOrZero(item.lean_mass ?? item.leanMass),
+    fatMass: numberOrZero(item.fat_mass ?? item.fatMass),
+    abdomen: numberOrZero(item.abdomen),
+    waist: numberOrZero(item.waist),
+    hip: numberOrZero(item.hip),
+    rightArm: numberOrZero(item.right_arm ?? item.rightArm),
+    leftArm: numberOrZero(item.left_arm ?? item.leftArm),
+    rightThigh: numberOrZero(item.right_thigh ?? item.rightThigh),
+    leftThigh: numberOrZero(item.left_thigh ?? item.leftThigh),
+    rightCalf: numberOrZero(item.right_calf ?? item.rightCalf),
+    leftCalf: numberOrZero(item.left_calf ?? item.leftCalf),
+    photos: item.photos ?? [],
+    notes: item.notes ?? ''
+  };
+}
+
 export async function saveStudentRemote(student: Student): Promise<string | undefined> {
   if (!isSupabaseConfigured()) return student.id;
   const fullName = student.fullName?.trim() || student.email;
@@ -65,11 +95,11 @@ export async function saveStudentRemote(student: Student): Promise<string | unde
   return data.id as string;
 }
 
-export async function saveAssessmentRemote(assessment: PhysicalAssessment): Promise<string | undefined> {
-  if (!isSupabaseConfigured()) return assessment.id;
-  const { data, error } = await requireSupabase().from('assessments').upsert(assessmentToRow(assessment)).select('id').single();
+export async function saveAssessmentRemote(assessment: PhysicalAssessment): Promise<PhysicalAssessment | undefined> {
+  if (!isSupabaseConfigured()) return assessment;
+  const { data, error } = await requireSupabase().from('assessments').upsert(assessmentToRow(assessment)).select('*').single();
   if (error) throw error;
-  return data.id as string;
+  return mapAssessmentFromSupabase(data as Record<string, any>);
 }
 
 export async function saveAnamnesisRemote(anamnesis: Anamnesis): Promise<string | undefined> {
@@ -196,13 +226,86 @@ export async function savePaymentRemote(payment: Payment): Promise<string | unde
   return data.id as string;
 }
 
-export async function saveWorkoutLogRemote(workoutId: string, studentId: string) {
-  if (!isSupabaseConfigured()) return;
-  const { error } = await requireSupabase().from('workout_logs').insert({
-    workout_id: workoutId,
-    student_id: studentId
-  });
+export async function savePeriodizationRemote(periodization: Periodization): Promise<string | undefined> {
+  if (!isSupabaseConfigured()) return periodization.id;
+  const { data, error } = await requireSupabase()
+    .from('periodizations')
+    .upsert({
+      ...(isUuid(periodization.id) ? { id: periodization.id } : {}),
+      student_id: periodization.studentId,
+      duration_weeks: periodization.weeks,
+      phases: periodization.phases,
+      status: periodization.status || 'ativo',
+      updated_at: new Date().toISOString()
+    })
+    .select('id')
+    .single();
   if (error) throw error;
+  return data.id as string;
+}
+
+async function deleteById(table: string, id: string) {
+  if (!isSupabaseConfigured() || !id) return;
+  const { error } = await requireSupabase().from(table).delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteStudentRemote(studentId: string) {
+  await deleteById('students', studentId);
+}
+
+export async function deleteAssessmentRemote(assessmentId: string) {
+  await deleteById('assessments', assessmentId);
+}
+
+export async function deleteAnamnesisRemote(anamnesisId: string) {
+  await deleteById('anamnesis', anamnesisId);
+}
+
+export async function deleteWorkoutRemote(workoutId: string) {
+  await deleteById('workouts', workoutId);
+}
+
+export async function deleteCheckInRemote(checkInId: string) {
+  await deleteById('checkins', checkInId);
+}
+
+export async function deletePaymentRemote(paymentId: string) {
+  await deleteById('financial_records', paymentId);
+}
+
+export async function deletePeriodizationRemote(periodizationId: string) {
+  await deleteById('periodizations', periodizationId);
+}
+
+export async function saveWorkoutLogRemote(workoutId: string, studentId: string, profileId?: string): Promise<WorkoutLog | undefined> {
+  const completedAt = new Date().toISOString();
+  const log: WorkoutLog = {
+    id: `log-${crypto.randomUUID()}`,
+    workoutId,
+    studentId,
+    profileId,
+    completedAt,
+    status: 'concluido'
+  };
+  if (!isSupabaseConfigured()) return log;
+  const { data, error } = await requireSupabase().from('workout_logs').insert({
+    workout_id: workoutId,
+    student_id: studentId,
+    profile_id: profileId ?? null,
+    completed_at: completedAt,
+    status: 'concluido'
+  }).select('id,workout_id,student_id,profile_id,completed_at,status,notes').single();
+  if (error) throw error;
+  return {
+    id: data.id,
+    workoutId: data.workout_id,
+    studentId: data.student_id,
+    profileId: data.profile_id ?? undefined,
+    completedAt: data.completed_at,
+    status: data.status ?? 'concluido',
+    notes: data.notes ?? undefined
+  };
 }
 
 export async function findStudentByEmail(email: string) {

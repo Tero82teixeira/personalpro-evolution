@@ -10,11 +10,18 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
-import { loadData, saveData, loadSession, makeId, cleanDemoData } from './services/storage';
+import { loadData, saveData, loadSession, makeId } from './services/storage';
 import { isSupabaseConfigured } from './services/supabase/config';
 import { authService } from './services/auth';
 import { loadAppData } from './services/appData';
 import {
+  deleteAnamnesisRemote,
+  deleteAssessmentRemote,
+  deleteCheckInRemote,
+  deletePaymentRemote,
+  deletePeriodizationRemote,
+  deleteStudentRemote,
+  deleteWorkoutRemote,
   findStudentByEmail,
   findStudentProfileByEmail,
   linkStudentProfileRemote,
@@ -22,12 +29,13 @@ import {
   saveAnamnesisRemote,
   saveCheckInRemote,
   savePaymentRemote,
+  savePeriodizationRemote,
   saveStudentRemote,
   saveWorkoutLogRemote,
   saveWorkoutRemote
 } from './services/remoteActions';
 import { calculateImc, daysUntil, formatCurrency, formatDate, latestAssessment, studentInitials } from './utils/metrics';
-import type { Anamnesis, AppData, CheckIn, Exercise, MarketingIdea, MessageTemplate, Payment, PhysicalAssessment, Student, User, Workout } from './types';
+import type { Anamnesis, AppData, CheckIn, Exercise, MarketingIdea, MessageTemplate, Payment, Periodization, PeriodizationPhase, PhysicalAssessment, Student, User, Workout, WorkoutLog } from './types';
 
 type IconProps = { size?: number; className?: string };
 type IconComponent = (props: IconProps) => React.JSX.Element;
@@ -58,7 +66,6 @@ const UserRound = makeIcon('U');
 const Users = makeIcon('G');
 const Menu = makeIcon('=');
 const X = makeIcon('x');
-const Trash = makeIcon('!');
 
 type AdminTab =
   | 'dashboard'
@@ -167,12 +174,94 @@ async function copyTextToClipboard(text: string) {
   document.body.removeChild(element);
 }
 
+function formatDateTimeParts(value?: string) {
+  if (!value) return { date: '-', time: '-' };
+  const date = new Date(value);
+  return {
+    date: new Intl.DateTimeFormat('pt-BR').format(date),
+    time: new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(date)
+  };
+}
+
+function workoutName(data: AppData, workoutId: string) {
+  return data.workouts.find((workout) => workout.id === workoutId)?.name ?? 'Treino removido';
+}
+
+function workoutLogsForStudent(data: AppData, studentId: string) {
+  return data.workoutLogs.filter((log) => log.studentId === studentId).sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+}
+
+function daysSince(value?: string) {
+  if (!value) return '-';
+  const today = new Date();
+  const last = new Date(value);
+  return Math.max(0, Math.floor((today.getTime() - last.getTime()) / 86400000));
+}
+
+function monthWorkoutCount(logs: WorkoutLog[]) {
+  const now = new Date();
+  return logs.filter((log) => {
+    const date = new Date(log.completedAt);
+    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+  }).length;
+}
+
+function expectedMonthlyWorkouts(data: AppData, studentId: string) {
+  const weeklyTotal = data.workouts
+    .filter((workout) => workout.studentId === studentId)
+    .reduce((sum, workout) => sum + Number(workout.weeklyFrequency.match(/\d+/)?.[0] ?? 0), 0);
+  return weeklyTotal ? weeklyTotal * 4 : 12;
+}
+
+function planAdherence(data: AppData, student: Student, logs: WorkoutLog[]) {
+  const expected = expectedMonthlyWorkouts(data, student.id);
+  if (!expected) return 0;
+  return Math.min(100, Math.round((monthWorkoutCount(logs) / expected) * 100));
+}
+
+function assessmentField(assessment: PhysicalAssessment, keys: string[]) {
+  const source = assessment as unknown as Record<string, any>;
+  for (const key of keys) {
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') return source[key];
+  }
+  return undefined;
+}
+
+function getAssessmentStudentId(assessment: PhysicalAssessment) {
+  return String(assessmentField(assessment, ['studentId', 'student_id']) ?? (assessment as unknown as { student?: { id?: string } }).student?.id ?? '');
+}
+
+function getAssessmentDateValue(assessment: PhysicalAssessment) {
+  return String(assessmentField(assessment, ['date', 'assessmentDate', 'assessment_date', 'createdAt', 'created_at']) ?? '');
+}
+
+function getAssessmentNumber(assessment: PhysicalAssessment, keys: string[]) {
+  const value = Number(assessmentField(assessment, keys));
+  return Number.isFinite(value) ? value : 0;
+}
+
+function buildAssessmentSummaryBars(firstAssessment?: PhysicalAssessment, latestAssessment?: PhysicalAssessment) {
+  if (!firstAssessment) return [];
+  const currentAssessment = latestAssessment ?? firstAssessment;
+  return [
+    { name: 'Peso inicial', valor: getAssessmentNumber(firstAssessment, ['weight', 'peso']) },
+    { name: 'Peso atual', valor: getAssessmentNumber(currentAssessment, ['weight', 'peso']) },
+    { name: 'Gordura inicial', valor: getAssessmentNumber(firstAssessment, ['bodyFat', 'body_fat', 'gordura']) },
+    { name: 'Gordura atual', valor: getAssessmentNumber(currentAssessment, ['bodyFat', 'body_fat', 'gordura']) }
+  ];
+}
+
+function scrollToTop() {
+  window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
+}
+
 const emptyAppData: AppData = {
   users: [],
   students: [],
   assessments: [],
   anamneses: [],
   workouts: [],
+  workoutLogs: [],
   periodizations: [],
   checkIns: [],
   payments: [],
@@ -187,6 +276,10 @@ function App() {
   const [toast, setToast] = useState('');
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured());
   const user = data.users.find((item) => item.id === sessionId) ?? null;
+
+  useEffect(() => {
+    if (user) scrollToTop();
+  }, [user?.id, user?.role]);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
@@ -224,6 +317,7 @@ function App() {
       const nextData = isSupabaseConfigured() ? await loadAppData(found) : data;
       setData({ ...nextData, users: nextData.users.some((item) => item.id === found.id) ? nextData.users : [...nextData.users, found] });
       setSessionId(found.id);
+      scrollToTop();
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'E-mail ou senha inválidos.');
     }
@@ -323,32 +417,27 @@ function AuthScreen({
 }) {
   const [role, setRole] = useState<User['role']>('student');
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('personal@demo.com');
-  const [password, setPassword] = useState('123456');
-  const title = mode === 'login' ? 'Acesse sua evolução' : mode === 'register' ? 'Criar acesso' : 'Recuperar senha';
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const title = mode === 'login' ? 'Entre com sua conta de Personal ou Aluno.' : mode === 'register' ? 'Criar acesso' : 'Recuperar senha';
 
   return (
     <main className="min-h-screen bg-ink text-white">
       <div className="grid min-h-screen lg:grid-cols-[1.05fr_0.95fr]">
-        <section className="relative flex flex-col justify-between overflow-hidden px-6 py-8 sm:px-10 lg:px-14">
+        <section className="relative flex min-h-[42vh] flex-col justify-between overflow-hidden px-5 py-7 sm:px-10 lg:min-h-screen lg:px-14">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_18%,rgba(58,183,255,.28),transparent_28%),linear-gradient(140deg,#06101d_0%,#0d1726_52%,#10201d_100%)]" />
           <div className="relative z-10 flex items-center gap-3">
             <Logo />
             <span className="text-xl font-bold tracking-wide">PersonalPro Evolution</span>
           </div>
-          <div className="relative z-10 max-w-2xl py-16 lg:py-0">
+          <div className="relative z-10 max-w-2xl py-10 lg:py-0">
             <p className="mb-4 text-sm font-semibold uppercase tracking-[0.25em] text-fitgreen">PWA fitness premium</p>
-            <h1 className="text-4xl font-black leading-tight sm:text-6xl">
+            <h1 className="text-3xl font-black leading-tight sm:text-5xl lg:text-6xl">
               Gestão, treino e progresso no mesmo app.
             </h1>
             <p className="mt-6 max-w-xl text-base leading-7 text-slate-300 sm:text-lg">
-              Um MVP funcional para personal trainer e aluno, com check-ins, avaliações, treinos, financeiro e painel mobile-first.
+              Entre com sua conta de Personal ou Aluno para acompanhar treinos, check-ins, avaliações e evolução com segurança.
             </p>
-          </div>
-          <div className="relative z-10 grid gap-3 text-sm text-slate-300 sm:grid-cols-3">
-            <MetricPill label="Login admin" value="personal@demo.com" />
-            <MetricPill label="Login aluno" value="aluno@demo.com" />
-            <MetricPill label="Senha demo" value="123456" />
           </div>
         </section>
         <section className="flex items-center justify-center bg-[#091422] px-5 py-10">
@@ -366,7 +455,7 @@ function AuthScreen({
           >
             <h2 className="text-2xl font-bold">{title}</h2>
             <p className="mt-2 text-sm text-slate-400">
-              {mode === 'recover' ? 'No MVP, a recuperação exibe o fluxo visual.' : 'Entre como personal ou aluno para explorar.'}
+              {mode === 'recover' ? 'Informe seu e-mail para receber as instruções de recuperação.' : 'Use o e-mail e senha cadastrados no sistema.'}
             </p>
             {toast && <div className="mt-4 rounded-md border border-fitorange/40 bg-fitorange/10 p-3 text-sm">{toast}</div>}
             <div className="mt-6 space-y-4">
@@ -435,19 +524,17 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
   const [selectedStudentId, setSelectedStudentId] = useState(data.students[0]?.id ?? '');
   const selectedStudent = data.students.find((student) => student.id === selectedStudentId);
   const handleSelectStudent = (studentId: string) => {
-    const foundStudent = data.students.find((student) => student.id === studentId);
-    console.debug('[PersonalPro] Aluno selecionado', { studentId, foundStudent });
     setSelectedStudentId(studentId);
   };
   useEffect(() => {
     if (selectedStudentId && !data.students.some((student) => student.id === selectedStudentId)) {
-      console.debug('[PersonalPro] Aluno selecionado não existe mais, limpando formulário', { selectedStudentId });
       setSelectedStudentId('');
     }
   }, [data.students, selectedStudentId]);
   const selectTab = (nextTab: AdminTab) => {
     setTab(nextTab);
     setMenuOpen(false);
+    scrollToTop();
   };
 
   return (
@@ -467,13 +554,13 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
       </nav>
       <section className="min-w-0">
         {data.students.length > 0 && <StudentSelector students={data.students} value={selectedStudentId} onChange={handleSelectStudent} />}
-        {tab === 'dashboard' && <AdminDashboard data={data} commit={commit} />}
+        {tab === 'dashboard' && <AdminDashboard data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} />}
         {tab === 'students' && <StudentCrud data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} onSelect={handleSelectStudent} commit={commit} />}
         {tab === 'assessments' && selectedStudent && <Assessments data={data} student={selectedStudent} commit={commit} />}
         {tab === 'anamnesis' && selectedStudent && <AnamnesisView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'workouts' && selectedStudent && <WorkoutCrud data={data} student={selectedStudent} user={user} commit={commit} />}
         {tab === 'periodization' && selectedStudent && <PeriodizationView data={data} student={selectedStudent} commit={commit} />}
-        {tab === 'checkins' && <CheckinsView data={data} selectedStudent={selectedStudent} />}
+        {tab === 'checkins' && <CheckinsView data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} commit={commit} />}
         {tab === 'evolution' && selectedStudent && <EvolutionView data={data} student={selectedStudent} />}
         {tab === 'finance' && <FinanceView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'messages' && <MessagesView data={data} />}
@@ -489,6 +576,10 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
 function StudentArea({ user, data, commit }: { user: User; data: AppData; commit: (data: AppData, message?: string) => void }) {
   const [tab, setTab] = useState<StudentTab>('home');
   const student = resolveStudentForUser(data, user);
+  const selectTab = (nextTab: StudentTab) => {
+    setTab(nextTab);
+    scrollToTop();
+  };
   if (!student) return <Empty title="Perfil não encontrado" text="Entre em contato com o personal." />;
 
   return (
@@ -501,7 +592,7 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-line bg-ink/95 px-2 py-2 backdrop-blur">
         <div className="mx-auto grid max-w-4xl grid-cols-5 gap-1">
           {studentTabs.map((item) => (
-            <MobileTab key={item.id} active={tab === item.id} icon={item.icon} label={item.label} onClick={() => setTab(item.id)} />
+            <MobileTab key={item.id} active={tab === item.id} icon={item.icon} label={item.label} onClick={() => selectTab(item.id)} />
           ))}
         </div>
       </nav>
@@ -509,81 +600,159 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
   );
 }
 
-function AdminDashboard({ data, commit }: { data: AppData; commit: (data: AppData, message?: string) => void }) {
+function AdminDashboard({
+  data,
+  selectedStudentId,
+  selectedStudent
+}: {
+  data: AppData;
+  selectedStudentId: string;
+  selectedStudent?: Student;
+}) {
   const active = data.students.filter((student) => student.status === 'ativo').length;
   const studentsWithCheckIn = new Set(data.checkIns.map((item) => item.studentId));
-  const studentsWithAssessment = new Set(data.assessments.map((item) => item.studentId));
+  const studentsWithAssessment = new Set(data.assessments.map((item) => getAssessmentStudentId(item)).filter(Boolean));
   const pendingCheckinStudents = data.students.filter((student) => !studentsWithCheckIn.has(student.id));
   const pendingPaymentItems = data.payments.filter((payment) => payment.status !== 'pago');
   const noEvolutionStudents = data.students.filter((student) => !studentsWithAssessment.has(student.id));
   const latest = data.assessments.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
-  const chart = data.students.map((student) => ({
-    name: student.fullName.split(' ')[0],
-    peso: student.currentWeight,
-    inicial: student.initialWeight
-  }));
+  const now = new Date();
+  const workoutsToday = data.workoutLogs.filter((log) => {
+    const date = new Date(log.completedAt);
+    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  }).length;
+  const monthRevenue = data.payments
+    .filter((payment) => {
+      const date = new Date(`${payment.dueDate}T00:00:00`);
+      return payment.status === 'pago' && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+    })
+    .reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0);
+  const currentStudent = selectedStudent ?? data.students.find((student) => student.id === selectedStudentId);
+  const selectedWorkoutLogs = selectedStudentId ? workoutLogsForStudent(data, selectedStudentId) : [];
+  const selectedLatestWorkoutLog = selectedWorkoutLogs[0];
+  const selectedLatestWorkoutDateTime = formatDateTimeParts(selectedLatestWorkoutLog?.completedAt);
+  const selectedCheckIns = selectedStudentId ? data.checkIns.filter((checkIn) => checkIn.studentId === selectedStudentId).sort((a, b) => b.date.localeCompare(a.date)) : [];
+  const selectedPayments = selectedStudentId ? data.payments.filter((payment) => payment.studentId === selectedStudentId) : [];
+  const selectedPeriodization = selectedStudentId ? data.periodizations.find((periodization) => periodization.studentId === selectedStudentId && periodization.status === 'ativo') : undefined;
+  const getStudentAssessments = (studentId: string) =>
+    data.assessments
+      .filter((assessment) => getAssessmentStudentId(assessment) === studentId)
+      .sort((a, b) => getAssessmentDateValue(a).localeCompare(getAssessmentDateValue(b)));
+  const selectedAssessments = selectedStudentId ? getStudentAssessments(selectedStudentId) : [];
+  const firstAssessment = selectedAssessments[0];
+  const latestSelectedAssessment = selectedAssessments[selectedAssessments.length - 1];
+  const initialWeight = firstAssessment ? getAssessmentNumber(firstAssessment, ['weight', 'peso']) : 0;
+  const currentWeight = latestSelectedAssessment ? getAssessmentNumber(latestSelectedAssessment, ['weight', 'peso']) : 0;
+  const initialBodyFat = firstAssessment ? getAssessmentNumber(firstAssessment, ['bodyFat', 'body_fat', 'gordura']) : 0;
+  const currentBodyFat = latestSelectedAssessment ? getAssessmentNumber(latestSelectedAssessment, ['bodyFat', 'body_fat', 'gordura']) : 0;
+  const selectedFinancialStatus = selectedPayments.find((payment) => payment.status === 'atrasado') ?? selectedPayments.find((payment) => payment.status === 'pendente') ?? selectedPayments[0];
+  const selectedChart = buildAssessmentSummaryBars(firstAssessment, latestSelectedAssessment);
+  const hasSelectedStudentData = Boolean(
+    currentStudent &&
+      (selectedWorkoutLogs.length || selectedCheckIns.length || selectedPayments.length || selectedPeriodization || selectedAssessments.length)
+  );
+  const inactiveWorkoutAlerts = data.students
+    .map((student) => {
+      const latestLog = workoutLogsForStudent(data, student.id)[0];
+      const inactiveDays = latestLog ? Number(daysSince(latestLog.completedAt)) : Number.POSITIVE_INFINITY;
+      return { student, latestLog, inactiveDays };
+    })
+    .filter((item) => item.inactiveDays > 7);
 
   return (
     <Stack>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <PageTitle title="Dashboard" subtitle="Visão rápida da operação, evolução e pendências dos alunos." />
-        <button
-          className="btn-danger"
-          onClick={() => {
-            if (window.confirm('Tem certeza que deseja limpar os dados fictícios? Alunos, treinos, avaliações, check-ins e financeiro serão removidos.')) {
-              commit(cleanDemoData(), 'Dados demo removidos. Base limpa pronta para uso.');
-            }
-          }}
-        >
-          <Trash size={16} /> Limpar dados demo
-        </button>
-      </div>
-      <div className={`rounded-lg border p-4 ${isSupabaseConfigured() ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-fitorange/40 bg-fitorange/10'}`}>
-        <p className="text-sm font-semibold">{isSupabaseConfigured() ? 'Supabase configurado' : 'Fallback localStorage ativo'}</p>
-        <p className="mt-1 text-sm text-slate-300">
-          {isSupabaseConfigured()
-            ? 'As variáveis de ambiente foram encontradas e os services já estão prontos para REST Supabase.'
-            : 'Preencha VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para conectar ao banco real.'}
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="Alunos ativos" value={active} icon={Users} accent="blue" />
-        <StatCard label="Check-in pendente" value={pendingCheckinStudents.length} icon={CalendarCheck} accent="orange" />
-        <StatCard label="Pagamentos pendentes" value={pendingPaymentItems.length} icon={CreditCard} accent="orange" />
-        <StatCard label="Evoluções recentes" value={latest.length} icon={LineChart} accent="green" />
-        <StatCard label="Sem evolução" value={noEvolutionStudents.length} icon={Activity} accent="blue" />
-      </div>
-      <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
-        <Panel title="Peso inicial x atual">
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chart}>
-                <CartesianGrid stroke="#1d2b3d" />
-                <XAxis dataKey="name" stroke="#94a3b8" />
-                <YAxis stroke="#94a3b8" />
-                <Tooltip contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }} />
-                <Bar dataKey="inicial" fill="#3ab7ff" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="peso" fill="#35e68c" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Panel>
-        <Panel title="Próximos vencimentos">
-          <div className="space-y-3">
-            {data.payments.length ? data.payments
-              .slice()
-              .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
-              .map((payment) => (
-                <Row key={payment.id} title={studentName(data, payment.studentId)} meta={`${formatDate(payment.dueDate)} - ${formatCurrency(payment.amount)}`} badge={payment.status} />
-              )) : <Empty title="Sem vencimentos" text="Cadastre pagamentos para acompanhar receitas e pendências." />}
-          </div>
-        </Panel>
-      </div>
-      <Panel title="Alertas claros">
-        <div className="grid gap-3 md:grid-cols-3">
-          <AlertBox title="Sem evolução registrada" items={noEvolutionStudents.map((student) => student.fullName)} empty="Todos possuem avaliação." tone="blue" />
-          <AlertBox title="Check-in pendente" items={pendingCheckinStudents.map((student) => student.fullName)} empty="Todos responderam check-in." tone="orange" />
-          <AlertBox title="Pagamento pendente" items={pendingPaymentItems.map((payment) => `${studentName(data, payment.studentId)} - ${payment.status}`)} empty="Sem cobranças pendentes." tone="green" />
+      <PageTitle title="Dashboard" subtitle="Visão rápida da operação, evolução e pendências dos alunos." />
+
+      <Panel title="Resumo geral da operação">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+          <StatCard label="Alunos ativos" value={active} icon={Users} accent="blue" />
+          <StatCard label="Check-ins pendentes" value={pendingCheckinStudents.length} icon={CalendarCheck} accent="orange" />
+          <StatCard label="Pagamentos pendentes" value={pendingPaymentItems.length} icon={CreditCard} accent="orange" />
+          <StatCard label="Evoluções recentes" value={latest.length} icon={LineChart} accent="green" />
+          <StatCard label="Treinos concluídos hoje" value={workoutsToday} icon={Dumbbell} accent="green" />
+          <StatCard label="Receita do mês" value={formatCurrency(monthRevenue)} icon={CreditCard} accent="blue" />
+        </div>
+      </Panel>
+
+      <Panel title="Resumo do aluno selecionado">
+        {currentStudent ? (
+          <Stack>
+            {!hasSelectedStudentData && <Empty title="Este aluno ainda não possui dados suficientes." text="Registre treinos, check-ins, pagamentos ou periodização para enriquecer o resumo." />}
+            {!selectedAssessments.length && <Empty title="Este aluno ainda não possui avaliação física registrada." text="Cadastre uma avaliação para preencher peso, gordura e gráfico no Dashboard." />}
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <InfoBox label="Nome do aluno" value={studentDisplayName(currentStudent)} />
+              <InfoBox label="Peso inicial" value={firstAssessment ? `${initialWeight} kg` : 'Sem avaliação'} />
+              <InfoBox label="Peso atual" value={latestSelectedAssessment ? `${currentWeight} kg` : 'Sem avaliação'} />
+              <InfoBox label="Gordura inicial" value={firstAssessment ? `${initialBodyFat}%` : 'Sem avaliação'} />
+              <InfoBox label="Gordura atual" value={latestSelectedAssessment ? `${currentBodyFat}%` : 'Sem avaliação'} />
+              <InfoBox label="Último treino realizado" value={selectedLatestWorkoutLog ? workoutName(data, selectedLatestWorkoutLog.workoutId) : 'Sem registros'} />
+              <InfoBox label="Data do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.date : 'Sem registros'} />
+              <InfoBox label="Hora do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.time : 'Sem registros'} />
+              <InfoBox label="Dias sem treinar" value={selectedLatestWorkoutLog ? `${daysSince(selectedLatestWorkoutLog.completedAt)} dias` : 'Sem registros'} />
+              <InfoBox label="Treinos concluídos no mês" value={monthWorkoutCount(selectedWorkoutLogs)} />
+              <InfoBox label="Aderência ao plano" value={`${planAdherence(data, currentStudent, selectedWorkoutLogs)}%`} />
+              <InfoBox label="Último check-in" value={selectedCheckIns[0] ? formatDate(selectedCheckIns[0].date) : 'Sem registros'} />
+              <InfoBox label="Status financeiro do aluno" value={selectedFinancialStatus ? `${selectedFinancialStatus.status} - ${formatDate(selectedFinancialStatus.dueDate)}` : 'Sem registro'} />
+              <InfoBox label="Periodização ativa" value={selectedPeriodization ? `${selectedPeriodization.weeks} semanas` : 'Sem periodização ativa'} />
+            </div>
+
+            <Panel title="Peso e gordura do aluno">
+              {selectedAssessments.length ? (
+                <>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={selectedChart}>
+                        <CartesianGrid stroke="#1d2b3d" />
+                        <XAxis dataKey="name" stroke="#94a3b8" />
+                        <YAxis stroke="#94a3b8" />
+                        <Tooltip contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }} />
+                        <Bar dataKey="valor" name="Valor" fill="#35e68c" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </>
+              ) : <Empty title="Este aluno ainda não possui avaliação física registrada." text="O gráfico será exibido quando houver pelo menos uma avaliação." />}
+              <p className="mt-3 text-xs text-slate-500">Total de avaliações carregadas: {data.assessments.length}</p>
+              <p className="text-xs text-slate-500">Total do aluno selecionado: {selectedAssessments.length}</p>
+            </Panel>
+
+            <WorkoutLogHistory data={data} logs={selectedWorkoutLogs} showStudent={false} emptyText="Este aluno ainda não concluiu nenhum treino." />
+          </Stack>
+        ) : (
+          <Empty title="Nenhum aluno selecionado" text="Selecione um aluno no seletor superior para ver o resumo individual." />
+        )}
+      </Panel>
+
+      <Panel title="Alertas gerais">
+        <div className="grid gap-3 lg:grid-cols-2">
+          <DashboardAlertList
+            title="Alunos sem evolução registrada"
+            items={noEvolutionStudents.map((student) => ({ name: studentDisplayName(student), reason: 'Sem avaliação física registrada', date: 'Sem registro' }))}
+            empty="Todos possuem avaliação."
+            tone="blue"
+          />
+          <DashboardAlertList
+            title="Alunos com check-in pendente"
+            items={pendingCheckinStudents.map((student) => ({ name: studentDisplayName(student), reason: 'Check-in pendente', date: 'Sem check-in registrado' }))}
+            empty="Todos responderam check-in."
+            tone="orange"
+          />
+          <DashboardAlertList
+            title="Alunos com pagamento pendente"
+            items={pendingPaymentItems.map((payment) => ({ name: studentName(data, payment.studentId), reason: `Pagamento ${payment.status}`, date: formatDate(payment.dueDate) }))}
+            empty="Sem cobranças pendentes."
+            tone="green"
+          />
+          <DashboardAlertList
+            title="Alunos sem treinar há mais de 7 dias"
+            items={inactiveWorkoutAlerts.map(({ student, latestLog }) => ({
+              name: studentDisplayName(student),
+              reason: latestLog ? `Sem treinar há ${daysSince(latestLog.completedAt)} dias` : 'Nenhum treino concluído',
+              date: latestLog ? formatDateTimeParts(latestLog.completedAt).date : 'Sem registro'
+            }))}
+            empty="Todos treinaram nos últimos 7 dias."
+            tone="orange"
+          />
         </div>
       </Panel>
     </Stack>
@@ -614,6 +783,31 @@ function StudentCrud({
   const [linkProfileEmail, setLinkProfileEmail] = useState('');
   const [linkProfileId, setLinkProfileId] = useState('');
   const studentProfiles = data.users.filter((user) => user.role === 'student');
+  const handleEditStudent = (student: Student) => {
+    setForm({
+      ...emptyStudent,
+      id: student.id || '',
+      profileId: student.profileId || '',
+      fullName: student.fullName || '',
+      email: student.email || '',
+      phone: student.phone || '',
+      birthDate: student.birthDate || '',
+      sex: student.sex || 'Feminino',
+      goal: student.goal || '',
+      level: student.level || 'iniciante',
+      status: student.status || 'pendente',
+      plan: student.plan || '',
+      startDate: student.startDate || '',
+      initialWeight: Number(student.initialWeight || 0),
+      currentWeight: Number(student.currentWeight || 0),
+      target: student.target || '',
+      notes: student.notes || '',
+      avatar: student.avatar
+    });
+    setAccessEmail(student.email || '');
+    setAccessMessage('');
+    setCopyFeedback('');
+  };
   const startNewStudent = () => {
     onSelect('');
     setForm({ ...emptyStudent });
@@ -625,10 +819,11 @@ function StudentCrud({
   };
   const selectStudentForEdit = (studentId: string) => {
     onSelect(studentId);
+    const student = data.students.find((item) => item.id === studentId);
+    if (student) handleEditStudent(student);
   };
   useEffect(() => {
     if (!selectedStudentId) {
-      console.debug('[PersonalPro] Nenhum aluno selecionado. Formulário em modo Novo aluno.');
       setForm({ ...emptyStudent });
       setAccessEmail('');
       setAccessMessage('');
@@ -636,7 +831,6 @@ function StudentCrud({
       return;
     }
     const student = data.students.find((item) => item.id === selectedStudentId) ?? selectedStudent;
-    console.debug('[PersonalPro] Aplicando aluno no formulário', { selectedStudentId, student });
     if (!student) {
       setForm({ ...emptyStudent });
       setAccessEmail('');
@@ -644,13 +838,8 @@ function StudentCrud({
       setCopyFeedback('');
       return;
     }
-    const normalizedStudent = studentToForm(student);
-    console.debug('[PersonalPro] Dados normalizados aplicados no formulário', normalizedStudent);
-    setForm(normalizedStudent);
-    setAccessEmail(normalizedStudent.email ?? '');
-    setAccessMessage('');
-    setCopyFeedback('');
-  }, [selectedStudentId, data.students]);
+    handleEditStudent(student);
+  }, [selectedStudentId, data.students, selectedStudent]);
   const save = async () => {
     if (!form.fullName || !form.email) return;
     const id = form.id || makeId('s');
@@ -659,12 +848,37 @@ function StudentCrud({
     try {
       const remoteId = await saveStudentRemote(nextStudent);
       const savedStudent = { ...nextStudent, id: remoteId ?? nextStudent.id };
-      commit({ ...data, students: exists ? data.students.map((student) => (student.id === id ? savedStudent : student)) : [...data.students, savedStudent] }, 'Aluno salvo com sucesso.');
+      commit({ ...data, students: exists ? data.students.map((student) => (student.id === id ? savedStudent : student)) : [...data.students, savedStudent] }, exists ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
       onSelect(savedStudent.id);
       setForm(savedStudent);
       setAccessEmail(savedStudent.email);
     } catch (error) {
+      console.error('Erro ao salvar aluno:', error);
       window.alert(error instanceof Error ? error.message : 'Não foi possível salvar o aluno.');
+    }
+  };
+  const deleteStudent = async (student: Student) => {
+    if (!window.confirm('Tem certeza que deseja excluir este aluno? Essa ação também poderá remover dados vinculados.')) return;
+    try {
+      await deleteStudentRemote(student.id);
+      const remainingStudents = data.students.filter((item) => item.id !== student.id);
+      commit({
+        ...data,
+        students: remainingStudents,
+        assessments: data.assessments.filter((item) => item.studentId !== student.id),
+        anamneses: data.anamneses.filter((item) => item.studentId !== student.id),
+        workouts: data.workouts.filter((item) => item.studentId !== student.id),
+        workoutLogs: data.workoutLogs.filter((item) => item.studentId !== student.id),
+        periodizations: data.periodizations.filter((item) => item.studentId !== student.id),
+        checkIns: data.checkIns.filter((item) => item.studentId !== student.id),
+        payments: data.payments.filter((item) => item.studentId !== student.id)
+      }, 'Excluído com sucesso.');
+      onSelect(remainingStudents[0]?.id ?? '');
+      setForm({ ...emptyStudent });
+      setAccessEmail('');
+    } catch (error) {
+      console.error('Erro ao excluir aluno:', error);
+      window.alert('Não foi possível excluir o aluno. Tente novamente.');
     }
   };
   const buildAccessMessage = () => {
@@ -817,7 +1031,7 @@ Qualquer dúvida, me chama por aqui.`;
       </Panel>
       {data.students.length ? <div className="grid gap-3 lg:grid-cols-2">
         {data.students.map((student) => (
-          <button key={student.id} className="rounded-lg border border-line bg-panel p-4 text-left transition hover:border-fitblue" onClick={() => selectStudentForEdit(student.id)}>
+          <div key={student.id} className="rounded-lg border border-line bg-panel p-4 transition hover:border-fitblue">
             <div className="flex items-center gap-3">
               <Avatar student={student} />
               <div className="min-w-0">
@@ -826,7 +1040,11 @@ Qualquer dúvida, me chama por aqui.`;
               </div>
               <Badge label={student.status} />
             </div>
-          </button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => selectStudentForEdit(student.id)}>Editar aluno</button>
+              <button className="btn-danger w-full sm:w-auto" onClick={() => deleteStudent(student)}>Excluir aluno</button>
+            </div>
+          </div>
         ))}
       </div> : <Empty title="Nenhum aluno cadastrado" text="Use o botão Novo aluno para começar com a base limpa." />}
     </Stack>
@@ -893,25 +1111,41 @@ function Assessments({ data, student, commit }: { data: AppData; student: Studen
       return;
     }
     try {
-      const remoteId = await saveAssessmentRemote(nextAssessment);
-      const savedAssessment = { ...nextAssessment, id: remoteId ?? nextAssessment.id };
+      const remoteAssessment = await saveAssessmentRemote(nextAssessment);
+      const savedAssessment = { ...nextAssessment, ...(remoteAssessment ?? {}), id: remoteAssessment?.id ?? nextAssessment.id };
       const updatedStudent = { ...student, currentWeight: savedAssessment.weight };
       await saveStudentRemote(updatedStudent);
       commit({
         ...data,
-        assessments: [...data.assessments.filter((item) => item.id !== nextAssessment.id), savedAssessment],
+        assessments: [...data.assessments.filter((item) => item.id !== nextAssessment.id && item.id !== savedAssessment.id), savedAssessment],
         students: data.students.map((item) => (item.id === student.id ? updatedStudent : item))
-      }, 'Avaliação registrada.');
+      }, form.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
+      setForm(createAssessmentForm(updatedStudent));
     } catch (error) {
       console.error('Erro ao salvar avaliação:', error);
       window.alert('Não foi possível salvar a avaliação. Verifique se o aluno está selecionado e se os campos estão preenchidos corretamente.');
+    }
+  };
+  const editAssessment = (assessment: PhysicalAssessment) => {
+    setForm({ ...assessment });
+    scrollToTop();
+  };
+  const deleteAssessment = async (assessment: PhysicalAssessment) => {
+    if (!window.confirm('Tem certeza que deseja excluir esta avaliação?')) return;
+    try {
+      await deleteAssessmentRemote(assessment.id);
+      commit({ ...data, assessments: data.assessments.filter((item) => item.id !== assessment.id) }, 'Excluído com sucesso.');
+      if (form.id === assessment.id) setForm(createAssessmentForm(student));
+    } catch (error) {
+      console.error('Erro ao excluir avaliação:', error);
+      window.alert('Não foi possível excluir a avaliação.');
     }
   };
 
   return (
     <Stack>
       <PageTitle title="Avaliação física" subtitle={`${student.fullName} - IMC calculado: ${calculateImc(Number(form.weight), Number(form.height))}`} />
-      <Panel title="Nova avaliação">
+      <Panel title={form.id ? 'Editar avaliação' : 'Nova avaliação'}>
         <div className="grid gap-3 md:grid-cols-3">
           <Input label="Data da avaliação" type="date" value={form.date} onChange={(value) => setForm({ ...form, date: value })} />
           {fields.map(([key, label]) => (
@@ -920,9 +1154,12 @@ function Assessments({ data, student, commit }: { data: AppData; student: Studen
           <ImageUpload label="Fotos de evolução" value={form.photos} onChange={(photos) => setForm({ ...form, photos })} multiple />
           <Textarea label="Observações" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} />
         </div>
-        <button className="btn-primary mt-4 w-full sm:w-auto" onClick={save}>Salvar avaliação</button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button className="btn-primary w-full sm:w-auto" onClick={save}>{form.id ? 'Atualizar avaliação' : 'Salvar avaliação'}</button>
+          {form.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => setForm(createAssessmentForm(student))}>Nova avaliação</button>}
+        </div>
       </Panel>
-      <HistoryList assessments={data.assessments.filter((item) => item.studentId === student.id)} />
+      <HistoryList assessments={data.assessments.filter((item) => item.studentId === student.id)} onEdit={editAssessment} onDelete={deleteAssessment} />
     </Stack>
   );
 }
@@ -991,12 +1228,24 @@ function AnamnesisView({ data, student, commit }: { data: AppData; student: Stud
       commit({
         ...data,
         anamneses: [...data.anamneses.filter((item) => item.id !== savedAnamnesis.id && item.studentId !== student.id), savedAnamnesis]
-      }, 'Anamnese salva.');
+      }, form.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
       setForm(savedAnamnesis);
       setEditing(false);
     } catch (error) {
       console.error('Erro ao salvar anamnese:', error);
       window.alert('Não foi possível salvar a anamnese. Verifique os campos e tente novamente.');
+    }
+  };
+  const deleteAnamnesis = async () => {
+    if (!anamnesis || !window.confirm('Tem certeza que deseja excluir esta anamnese?')) return;
+    try {
+      await deleteAnamnesisRemote(anamnesis.id);
+      commit({ ...data, anamneses: data.anamneses.filter((item) => item.id !== anamnesis.id) }, 'Excluído com sucesso.');
+      setForm(createAnamnesisForm(student));
+      setEditing(false);
+    } catch (error) {
+      console.error('Erro ao excluir anamnese:', error);
+      window.alert('Não foi possível excluir a anamnese.');
     }
   };
   return (
@@ -1035,7 +1284,10 @@ function AnamnesisView({ data, student, commit }: { data: AppData; student: Stud
           items.length ? (
             <>
               <div className="grid gap-3 md:grid-cols-2">{items.map(([label, value]) => <InfoBox key={label} label={label} value={value} />)}</div>
-              <button className="btn-secondary mt-4 w-full sm:w-auto" onClick={() => setEditing(true)}>Editar anamnese</button>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button className="btn-secondary w-full sm:w-auto" onClick={() => setEditing(true)}>Editar anamnese</button>
+                <button className="btn-danger w-full sm:w-auto" onClick={deleteAnamnesis}>Excluir anamnese</button>
+              </div>
             </>
           ) : (
             <div className="rounded-lg border border-dashed border-line bg-ink/40 p-5 text-center">
@@ -1072,21 +1324,41 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
   }, [student.id]);
   const save = async () => {
     if (!workout.name) return;
-    const nextWorkout = { ...workout, id: workout.id || makeId('w'), studentId: student.id };
+    const nextWorkout = { ...workout, id: workout.id || makeId('w'), studentId: workout.studentId || student.id };
     try {
       const remoteId = await saveWorkoutRemote(nextWorkout, user.id);
       const savedWorkout = { ...nextWorkout, id: remoteId ?? nextWorkout.id };
-      commit({ ...data, workouts: [...data.workouts.filter((item) => item.id !== nextWorkout.id), savedWorkout] }, 'Treino salvo e liberado para o aluno.');
+      commit({ ...data, workouts: [...data.workouts.filter((item) => item.id !== nextWorkout.id), savedWorkout] }, workout.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
       setWorkout(createWorkoutForm(student.id));
     } catch (error) {
+      console.error('Erro ao salvar treino:', error);
       window.alert(error instanceof Error ? error.message : 'Não foi possível salvar o treino.');
+    }
+  };
+  const editWorkout = (item: Workout) => {
+    setWorkout({ ...item, exercises: item.exercises.map((exercise) => ({ ...exercise })) });
+    scrollToTop();
+  };
+  const deleteWorkout = async (item: Workout) => {
+    if (!window.confirm('Tem certeza que deseja excluir este treino?')) return;
+    try {
+      await deleteWorkoutRemote(item.id);
+      commit({
+        ...data,
+        workouts: data.workouts.filter((workoutItem) => workoutItem.id !== item.id),
+        workoutLogs: data.workoutLogs.filter((log) => log.workoutId !== item.id)
+      }, 'Excluído com sucesso.');
+      if (workout.id === item.id) setWorkout(createWorkoutForm(student.id));
+    } catch (error) {
+      console.error('Erro ao excluir treino:', error);
+      window.alert('Não foi possível excluir o treino.');
     }
   };
 
   return (
     <Stack>
       <PageTitle title="Criação de treinos" subtitle={`Treinos personalizados para ${studentDisplayName(student)}.`} />
-      <Panel title="Treino personalizado">
+      <Panel title={workout.id ? 'Editar treino' : 'Treino personalizado'}>
         <div className="grid gap-3 md:grid-cols-3">
           <Input label="Nome do treino" value={workout.name} onChange={(value) => setWorkout({ ...workout, name: value })} />
           <Input label="Objetivo" value={workout.objective} onChange={(value) => setWorkout({ ...workout, objective: value })} />
@@ -1106,7 +1378,8 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
           <button className="btn-secondary w-full sm:w-auto" onClick={() => setWorkout({ ...workout, exercises: [...workout.exercises, emptyExercise()] })}><Plus size={16} /> Exercício</button>
-          <button className="btn-primary" onClick={save}>Salvar treino</button>
+          <button className="btn-primary w-full sm:w-auto" onClick={save}>{workout.id ? 'Atualizar treino' : 'Salvar treino'}</button>
+          {workout.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => setWorkout(createWorkoutForm(student.id))}>Novo treino</button>}
         </div>
       </Panel>
       <div className="grid gap-3 lg:grid-cols-2">
@@ -1114,6 +1387,10 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
           <Panel key={item.id} title={item.name} action={<Badge label={studentName(data, item.studentId)} />}>
             <p className="text-sm text-slate-400">{item.objective} - {item.estimatedDuration} - {item.weeklyFrequency}</p>
             <div className="mt-3 space-y-2">{item.exercises.map((exercise) => <Row key={exercise.id} title={exercise.name} meta={`${exercise.sets} x ${exercise.reps} - descanso ${exercise.rest}`} badge={exercise.status} />)}</div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => editWorkout(item)}>Editar treino</button>
+              <button className="btn-danger w-full sm:w-auto" onClick={() => deleteWorkout(item)}>Excluir treino</button>
+            </div>
           </Panel>
         ))}
       </div>
@@ -1121,29 +1398,159 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
   );
 }
 
+const phaseDescriptions: Record<string, string> = {
+  Adaptação: 'preparar o corpo, aprender técnica e criar consistência.',
+  Evolução: 'aumentar volume e melhorar resistência.',
+  Intensificação: 'aumentar dificuldade, carga ou densidade do treino.',
+  Manutenção: 'consolidar resultados e manter regularidade.',
+  Recuperação: 'reduzir intensidade e favorecer recuperação.'
+};
+
+function buildPeriodizationPhases(weeks: 4 | 8 | 12): PeriodizationPhase[] {
+  const plans: Record<4 | 8 | 12, { title: string; weeks: string; objective: string }[]> = {
+    4: [
+      { title: 'Adaptação', weeks: 'Semana 1', objective: 'Criar base técnica e rotina de treino.' },
+      { title: 'Evolução', weeks: 'Semana 2', objective: 'Aumentar volume com controle.' },
+      { title: 'Intensificação', weeks: 'Semana 3', objective: 'Elevar dificuldade sem perder qualidade.' },
+      { title: 'Recuperação', weeks: 'Semana 4', objective: 'Reduzir intensidade e absorver adaptações.' }
+    ],
+    8: [
+      { title: 'Adaptação', weeks: 'Semanas 1 e 2', objective: 'Consolidar técnica e consistência.' },
+      { title: 'Evolução', weeks: 'Semanas 3 e 4', objective: 'Aumentar volume e resistência.' },
+      { title: 'Intensificação', weeks: 'Semanas 5 e 6', objective: 'Subir carga, densidade ou complexidade.' },
+      { title: 'Manutenção', weeks: 'Semana 7', objective: 'Sustentar desempenho e regularidade.' },
+      { title: 'Recuperação', weeks: 'Semana 8', objective: 'Reduzir fadiga e favorecer recuperação.' }
+    ],
+    12: [
+      { title: 'Adaptação', weeks: 'Semanas 1 e 2', objective: 'Preparar o corpo e ajustar execução.' },
+      { title: 'Evolução', weeks: 'Semanas 3 a 5', objective: 'Progredir volume e resistência.' },
+      { title: 'Intensificação', weeks: 'Semanas 6 a 8', objective: 'Aumentar carga, dificuldade ou densidade.' },
+      { title: 'Manutenção', weeks: 'Semanas 9 e 10', objective: 'Consolidar resultados e frequência.' },
+      { title: 'Recuperação', weeks: 'Semanas 11 e 12', objective: 'Reduzir intensidade e recuperar bem.' }
+    ]
+  };
+  return plans[weeks].map((phase) => ({ ...phase, description: phaseDescriptions[phase.title] }));
+}
+
 function PeriodizationView({ data, student, commit }: { data: AppData; student: Student; commit: (data: AppData, message?: string) => void }) {
   const [weeks, setWeeks] = useState<4 | 8 | 12>(8);
-  const phases = ['Adaptação', 'Evolução', 'Intensificação', 'Manutenção', 'Recuperação'];
+  const periodization = data.periodizations.find((item) => item.studentId === student.id);
+  const previewPhases = buildPeriodizationPhases(weeks);
+  const savePeriodization = async () => {
+    if (periodization && !window.confirm('Este aluno já possui uma periodização. Deseja substituir?')) return;
+    const now = new Date().toISOString();
+    const nextPeriodization: Periodization = {
+      id: periodization?.id || makeId('p'),
+      studentId: student.id,
+      weeks,
+      phases: previewPhases,
+      startDate: periodization?.startDate || now.slice(0, 10),
+      status: 'ativo',
+      createdAt: periodization?.createdAt || now,
+      updatedAt: now
+    };
+    try {
+      const remoteId = await savePeriodizationRemote(nextPeriodization);
+      const savedPeriodization = { ...nextPeriodization, id: remoteId ?? nextPeriodization.id };
+      commit({
+        ...data,
+        periodizations: periodization
+          ? data.periodizations.map((item) => (item.id === periodization.id ? savedPeriodization : item))
+          : [...data.periodizations, savedPeriodization]
+      }, periodization ? 'Periodização atualizada com sucesso.' : 'Periodização criada com sucesso.');
+    } catch (error) {
+      console.error('Erro ao salvar periodização:', error);
+      window.alert('Não foi possível salvar a periodização.');
+    }
+  };
+  const editPeriodization = () => {
+    if (periodization) setWeeks(periodization.weeks);
+  };
+  const deletePeriodization = async () => {
+    if (!periodization) return;
+    if (!window.confirm('Tem certeza que deseja excluir a periodização deste aluno?')) return;
+    try {
+      await deletePeriodizationRemote(periodization.id);
+      commit({ ...data, periodizations: data.periodizations.filter((item) => item.id !== periodization.id) }, 'Periodização excluída com sucesso.');
+    } catch (error) {
+      console.error('Erro ao excluir periodização:', error);
+      window.alert('Não foi possível excluir a periodização.');
+    }
+  };
   return (
     <Stack>
-      <PageTitle title="Periodização" subtitle="Planeje ciclos de 4, 8 ou 12 semanas." />
-      <Panel title={student.fullName}>
+      <PageTitle title="Periodização" subtitle={`${studentDisplayName(student)} - planejamento visual de ciclos por fase.`} />
+      <Panel title="Criar periodização">
         <div className="flex flex-wrap gap-2">
           {[4, 8, 12].map((item) => <button key={item} className={weeks === item ? 'chip-active' : 'chip'} onClick={() => setWeeks(item as 4 | 8 | 12)}>{item} semanas</button>)}
         </div>
-        <div className="mt-5 grid gap-3 md:grid-cols-5">
-          {phases.map((phase, index) => <div key={phase} className="rounded-md border border-line bg-ink/50 p-4"><p className="text-xs text-slate-500">Fase {index + 1}</p><p className="font-semibold">{phase}</p></div>)}
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {previewPhases.map((phase, index) => (
+            <div key={`${phase.title}-${phase.weeks}`} className="rounded-md border border-line bg-ink/50 p-4">
+              <p className="text-xs text-slate-500">Fase {index + 1}</p>
+              <p className="font-semibold">{phase.title}</p>
+              <p className="mt-1 text-sm text-fitblue">{phase.weeks}</p>
+              <p className="mt-2 text-sm text-slate-300">{phase.description}</p>
+            </div>
+          ))}
         </div>
-        <button className="btn-primary mt-4 w-full sm:w-auto" onClick={() => commit({ ...data, periodizations: [...data.periodizations, { id: makeId('p'), studentId: student.id, weeks, phases, startDate: new Date().toISOString().slice(0, 10) }] }, 'Periodização criada.')}>Criar periodização</button>
+        <button className="btn-primary mt-4 w-full sm:w-auto" onClick={savePeriodization}>Criar periodização</button>
       </Panel>
+      {periodization ? (
+        <Panel title="Periodização ativa" action={<Badge label={periodization.status} />}>
+          <div className="grid gap-3 md:grid-cols-3">
+            <InfoBox label="Aluno" value={studentDisplayName(student)} />
+            <InfoBox label="Duração escolhida" value={`${periodization.weeks} semanas`} />
+            <InfoBox label="Data de criação" value={formatDate(periodization.startDate || periodization.createdAt)} />
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            {periodization.phases.map((phase, index) => (
+              <div key={`${periodization.id}-${phase.title}-${index}`} className="rounded-md border border-line bg-ink/40 p-4">
+                <p className="text-xs text-slate-500">Fase {index + 1}</p>
+                <h3 className="mt-1 font-bold">{phase.title}</h3>
+                <p className="mt-1 text-sm font-semibold text-fitgreen">{phase.weeks}</p>
+                <p className="mt-2 text-sm text-slate-300">{phase.objective}</p>
+                <p className="mt-2 text-xs leading-5 text-slate-400">{phase.description}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="btn-secondary w-full sm:w-auto" onClick={editPeriodization}>Editar periodização</button>
+            <button className="btn-danger w-full sm:w-auto" onClick={deletePeriodization}>Excluir periodização</button>
+          </div>
+        </Panel>
+      ) : (
+        <Empty title="Nenhuma periodização criada para este aluno." text="Escolha a duração do ciclo e crie uma periodização vinculada ao aluno selecionado." />
+      )}
     </Stack>
   );
 }
 
-function CheckinsView({ data, selectedStudent }: { data: AppData; selectedStudent?: Student }) {
+function CheckinsView({
+  data,
+  selectedStudentId,
+  selectedStudent,
+  commit
+}: {
+  data: AppData;
+  selectedStudentId: string;
+  selectedStudent?: Student;
+  commit: (data: AppData, message?: string) => void;
+}) {
   const [copyFeedback, setCopyFeedback] = useState('');
+  const currentStudent = selectedStudent ?? data.students.find((student) => student.id === selectedStudentId);
+  const selectedCheckins = data.checkIns.filter(
+    (item) => item.studentId === selectedStudentId
+  );
+  useEffect(() => {
+    setCopyFeedback('');
+  }, [selectedStudentId]);
   const copyReminder = async () => {
-    const student = selectedStudent ?? data.students[0];
+    const student = currentStudent;
+    if (!student) {
+      window.alert('Selecione um aluno para copiar o lembrete.');
+      return;
+    }
     const message = `Olá, ${studentDisplayName(student)}! Não esqueça de responder seu check-in semanal no app para eu acompanhar sua evolução e ajustar seu treino.`;
     try {
       await copyTextToClipboard(message);
@@ -1152,12 +1559,22 @@ function CheckinsView({ data, selectedStudent }: { data: AppData; selectedStuden
       window.alert('Não foi possível copiar o lembrete.');
     }
   };
+  const deleteCheckIn = async (checkIn: CheckIn) => {
+    if (!window.confirm('Tem certeza que deseja excluir este check-in?')) return;
+    try {
+      await deleteCheckInRemote(checkIn.id);
+      commit({ ...data, checkIns: data.checkIns.filter((item) => item.id !== checkIn.id) }, 'Excluído com sucesso.');
+    } catch (error) {
+      console.error('Erro ao excluir check-in:', error);
+      window.alert('Não foi possível excluir o check-in.');
+    }
+  };
   return (
     <Stack>
-      <PageTitle title="Check-in semanal" subtitle="Respostas dos alunos para ajuste de treino e conduta." />
-      {data.checkIns.length ? (
+      <PageTitle title="Check-in semanal" subtitle={`${currentStudent ? studentDisplayName(currentStudent) : 'Selecione um aluno'} - respostas para ajuste de treino e conduta.`} />
+      {selectedCheckins.length ? (
         <div className="grid gap-3 lg:grid-cols-2">
-          {data.checkIns.map((checkIn) => (
+          {selectedCheckins.map((checkIn) => (
             <Panel key={checkIn.id} title={studentName(data, checkIn.studentId)}>
               <div className="grid gap-3 sm:grid-cols-2">
                 <InfoBox label="Treinos" value={`${checkIn.trainingsDone} na semana`} />
@@ -1169,11 +1586,12 @@ function CheckinsView({ data, selectedStudent }: { data: AppData; selectedStuden
                 <InfoBox label="Dificuldade" value={checkIn.difficulty} />
                 <InfoBox label="Vitória" value={checkIn.victory} />
               </div>
+              <button className="btn-danger mt-4 w-full sm:w-auto" onClick={() => deleteCheckIn(checkIn)}>Excluir check-in</button>
             </Panel>
           ))}
         </div>
       ) : (
-        <Panel title="Nenhum check-in respondido ainda">
+        <Panel title={selectedStudentId ? 'Nenhum check-in respondido ainda para este aluno.' : 'Nenhum check-in respondido ainda'}>
           <p className="text-sm text-slate-300">Peça para o aluno responder o check-in na área do aluno.</p>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
             <button className="btn-primary w-full sm:w-auto" onClick={copyReminder}>Copiar lembrete de check-in</button>
@@ -1186,39 +1604,62 @@ function CheckinsView({ data, selectedStudent }: { data: AppData; selectedStuden
 }
 
 function EvolutionView({ data, student, compact = false }: { data: AppData; student: Student; compact?: boolean }) {
-  const assessments = data.assessments.filter((item) => item.studentId === student.id).sort((a, b) => a.date.localeCompare(b.date));
+  const assessments = data.assessments
+    .filter((item) => getAssessmentStudentId(item) === student.id)
+    .sort((a, b) => getAssessmentDateValue(a).localeCompare(getAssessmentDateValue(b)));
+  const firstAssessment = assessments[0];
+  const latestSelectedAssessment = assessments[assessments.length - 1];
+  const initialWeight = firstAssessment ? getAssessmentNumber(firstAssessment, ['weight', 'peso']) : 0;
+  const currentWeight = latestSelectedAssessment ? getAssessmentNumber(latestSelectedAssessment, ['weight', 'peso']) : 0;
+  const initialBodyFat = firstAssessment ? getAssessmentNumber(firstAssessment, ['bodyFat', 'body_fat', 'gordura']) : 0;
+  const currentBodyFat = latestSelectedAssessment ? getAssessmentNumber(latestSelectedAssessment, ['bodyFat', 'body_fat', 'gordura']) : 0;
+  const summaryChart = buildAssessmentSummaryBars(firstAssessment, latestSelectedAssessment);
   const chart = assessments.map((item) => ({
-    date: formatDate(item.date).slice(0, 5),
-    peso: item.weight,
-    imc: calculateImc(item.weight, item.height),
-    gordura: item.bodyFat,
-    massa: item.leanMass
+    date: formatDate(getAssessmentDateValue(item)).slice(0, 5),
+    peso: getAssessmentNumber(item, ['weight', 'peso']),
+    imc: calculateImc(getAssessmentNumber(item, ['weight', 'peso']), getAssessmentNumber(item, ['height', 'altura'])),
+    gordura: getAssessmentNumber(item, ['bodyFat', 'body_fat', 'gordura']),
+    massa: getAssessmentNumber(item, ['leanMass', 'lean_mass'])
   }));
   const checkIns = data.checkIns.filter((item) => item.studentId === student.id);
+  const workoutLogs = workoutLogsForStudent(data, student.id);
+  const latestWorkoutLog = workoutLogs[0];
+  const latestWorkoutDateTime = formatDateTimeParts(latestWorkoutLog?.completedAt);
   return (
     <Stack>
       <PageTitle title="Evolução do aluno" subtitle={`${student.fullName} - histórico, medidas, frequência e conquistas.`} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Peso inicial" value={`${student.initialWeight} kg`} icon={Activity} accent="blue" />
-        <StatCard label="Peso atual" value={`${student.currentWeight} kg`} icon={LineChart} accent="green" />
+        <StatCard label="Peso inicial" value={firstAssessment ? `${initialWeight} kg` : 'Sem avaliação'} icon={Activity} accent="blue" />
+        <StatCard label="Peso atual" value={latestSelectedAssessment ? `${currentWeight} kg` : 'Sem avaliação'} icon={LineChart} accent="green" />
         <StatCard label="Check-ins" value={checkIns.length} icon={CalendarCheck} accent="orange" />
-        <StatCard label="Treinos feitos" value={checkIns.reduce((sum, item) => sum + item.trainingsDone, 0)} icon={Dumbbell} accent="green" />
+        <StatCard label="Treinos feitos" value={workoutLogs.length} icon={Dumbbell} accent="green" />
       </div>
-      <Panel title="Gráficos de progresso">
-        <div className={compact ? 'h-64' : 'h-80'}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ReLineChart data={chart}>
-              <CartesianGrid stroke="#1d2b3d" />
-              <XAxis dataKey="date" stroke="#94a3b8" />
-              <YAxis stroke="#94a3b8" />
-              <Tooltip contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }} />
-              <Line type="monotone" dataKey="peso" stroke="#3ab7ff" strokeWidth={3} />
-              <Line type="monotone" dataKey="gordura" stroke="#ff8a3d" strokeWidth={3} />
-              <Line type="monotone" dataKey="massa" stroke="#35e68c" strokeWidth={3} />
-            </ReLineChart>
-          </ResponsiveContainer>
-        </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-2">
+        <StatCard label="Gordura inicial" value={firstAssessment ? `${initialBodyFat}%` : 'Sem avaliação'} icon={Activity} accent="orange" />
+        <StatCard label="Gordura atual" value={latestSelectedAssessment ? `${currentBodyFat}%` : 'Sem avaliação'} icon={LineChart} accent="green" />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Último treino realizado" value={latestWorkoutLog ? `${workoutName(data, latestWorkoutLog.workoutId)} - ${latestWorkoutDateTime.date} ${latestWorkoutDateTime.time}` : 'Sem registros'} icon={Dumbbell} accent="green" />
+        <StatCard label="Dias sem treinar" value={latestWorkoutLog ? `${daysSince(latestWorkoutLog.completedAt)} dias` : '-'} icon={CalendarCheck} accent="orange" />
+        <StatCard label="Treinos no mês" value={monthWorkoutCount(workoutLogs)} icon={Activity} accent="blue" />
+        <StatCard label="Aderência ao plano" value={`${planAdherence(data, student, workoutLogs)}%`} icon={LineChart} accent="green" />
+      </div>
+      <Panel title="Evolução física">
+        {assessments.length ? (
+          <div className={compact ? 'h-64' : 'h-80'}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={summaryChart}>
+                <CartesianGrid stroke="#1d2b3d" />
+                <XAxis dataKey="name" stroke="#94a3b8" />
+                <YAxis stroke="#94a3b8" />
+                <Tooltip contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }} />
+                <Bar dataKey="valor" name="Valor" fill="#35e68c" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        ) : <Empty title="Este aluno ainda não possui avaliação física registrada." text="O gráfico será exibido quando houver pelo menos uma avaliação." />}
       </Panel>
+      <WorkoutLogHistory data={data} logs={workoutLogs} />
       <HistoryList assessments={assessments} />
     </Stack>
   );
@@ -1256,7 +1697,7 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
       commit({
         ...data,
         payments: [...data.payments.filter((item) => item.id !== savedPayment.id), savedPayment]
-      }, 'Pagamento salvo.');
+      }, form.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
       setForm(createPaymentForm(student));
       setShowForm(false);
     } catch (error) {
@@ -1272,6 +1713,25 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
     } catch (error) {
       console.error('Erro ao atualizar pagamento:', error);
       window.alert('Não foi possível atualizar o status do pagamento.');
+    }
+  };
+  const editPayment = (payment: Payment) => {
+    setForm({ ...payment });
+    setShowForm(true);
+    scrollToTop();
+  };
+  const deletePayment = async (payment: Payment) => {
+    if (!window.confirm('Tem certeza que deseja excluir este pagamento?')) return;
+    try {
+      await deletePaymentRemote(payment.id);
+      commit({ ...data, payments: data.payments.filter((item) => item.id !== payment.id) }, 'Excluído com sucesso.');
+      if (form.id === payment.id) {
+        setForm(createPaymentForm(student));
+        setShowForm(false);
+      }
+    } catch (error) {
+      console.error('Erro ao excluir pagamento:', error);
+      window.alert('Não foi possível excluir o pagamento.');
     }
   };
   return (
@@ -1292,7 +1752,10 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
             <Input label="Vencimento" type="date" value={form.dueDate} onChange={(value) => setForm({ ...form, dueDate: value })} />
             <Textarea label="Observações" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} />
           </div>
-          <button className="btn-primary mt-4 w-full sm:w-auto" onClick={savePayment}>Salvar pagamento</button>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="btn-primary w-full sm:w-auto" onClick={savePayment}>{form.id ? 'Atualizar pagamento' : 'Salvar pagamento'}</button>
+            {form.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => { setForm(createPaymentForm(student)); setShowForm(false); }}>Novo pagamento</button>}
+          </div>
         </Panel>
       )}
       <div className="grid gap-3">
@@ -1308,6 +1771,8 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
               {(['pago', 'pendente', 'atrasado'] as const).map((status) => (
                 <button key={status} className={payment.status === status ? 'chip-active' : 'chip'} onClick={() => updatePaymentStatus(payment, status)}>{status}</button>
               ))}
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => editPayment(payment)}>Editar pagamento</button>
+              <button className="btn-danger w-full sm:w-auto" onClick={() => deletePayment(payment)}>Excluir pagamento</button>
             </div>
           </Panel>
         ))}
@@ -1386,6 +1851,33 @@ function MarketingView({ data }: { data: AppData }) {
   );
 }
 
+function WorkoutLogHistory({ data, logs, showStudent = true, emptyText = 'Quando o aluno concluir um treino, o registro aparecerá aqui.' }: { data: AppData; logs: WorkoutLog[]; showStudent?: boolean; emptyText?: string }) {
+  return (
+    <Panel title="Histórico de treinos realizados">
+      {logs.length ? (
+        <div className="space-y-3">
+          {logs.map((log) => {
+            const completed = formatDateTimeParts(log.completedAt);
+            return (
+              <div key={log.id} className="rounded-md border border-line bg-ink/40 p-3">
+                <div className={`grid gap-3 sm:grid-cols-2 ${showStudent ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
+                  {showStudent && <InfoBox label="Aluno" value={studentName(data, log.studentId)} />}
+                  <InfoBox label="Treino" value={workoutName(data, log.workoutId)} />
+                  <InfoBox label="Data" value={completed.date} />
+                  <InfoBox label="Hora" value={completed.time} />
+                  <InfoBox label="Status" value={<Badge label={log.status} />} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <Empty title="Sem treinos concluídos" text={emptyText} />
+      )}
+    </Panel>
+  );
+}
+
 function StudentDashboard({ data, student }: { data: AppData; student: Student }) {
   const nextWorkout = data.workouts.find((item) => item.studentId === student.id && !item.completed);
   const lastCheckIn = data.checkIns.filter((item) => item.studentId === student.id).sort((a, b) => b.date.localeCompare(a.date))[0];
@@ -1420,8 +1912,12 @@ function StudentWorkout({ data, student, commit }: { data: AppData; student: Stu
   const startWorkout = (workout: Workout) => updateWorkout({ ...workout, completed: false });
   const completeWorkout = async (workout: Workout) => {
     try {
-      await saveWorkoutLogRemote(workout.id, student.id);
-      updateWorkout({ ...workout, completed: true });
+      const workoutLog = await saveWorkoutLogRemote(workout.id, student.id, student.profileId);
+      commit({
+        ...data,
+        workouts: data.workouts.map((item) => (item.id === workout.id ? { ...workout, completed: true } : item)),
+        workoutLogs: workoutLog ? [...data.workoutLogs, workoutLog] : data.workoutLogs
+      }, 'Treino concluído.');
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Não foi possível concluir o treino.');
     }
@@ -1550,13 +2046,21 @@ function StudentSelector({ students, value, onChange }: { students: Student[]; v
   );
 }
 
-function HistoryList({ assessments }: { assessments: PhysicalAssessment[] }) {
+function HistoryList({ assessments, onEdit, onDelete }: { assessments: PhysicalAssessment[]; onEdit?: (assessment: PhysicalAssessment) => void; onDelete?: (assessment: PhysicalAssessment) => void }) {
   return (
     <Panel title="Histórico de avaliações">
       {assessments.length ? (
         <div className="space-y-3">
           {assessments.slice().sort((a, b) => b.date.localeCompare(a.date)).map((item) => (
-            <Row key={item.id} title={`${formatDate(item.date)} - ${item.weight} kg`} meta={`IMC ${calculateImc(item.weight, item.height)} - gordura ${item.bodyFat}% - cintura ${item.waist} cm`} badge="Avaliação" />
+            <div key={item.id} className="rounded-md border border-line bg-ink/40 p-3">
+              <Row title={`${formatDate(item.date)} - ${item.weight} kg`} meta={`IMC ${calculateImc(item.weight, item.height)} - gordura ${item.bodyFat}% - cintura ${item.waist} cm`} badge="Avaliação" />
+              {(onEdit || onDelete) && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {onEdit && <button className="btn-secondary w-full sm:w-auto" onClick={() => onEdit(item)}>Editar avaliação</button>}
+                  {onDelete && <button className="btn-danger w-full sm:w-auto" onClick={() => onDelete(item)}>Excluir avaliação</button>}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       ) : (
@@ -1715,6 +2219,34 @@ function Row({ title, meta, badge }: { title: string; meta: string; badge: strin
 function Badge({ label }: { label: string }) {
   const display = label === 'concluido' ? 'Concluído' : label === 'ativo' ? 'Ativo' : label === 'pendente' ? 'Pendente' : label === 'atrasado' ? 'Atrasado' : label === 'pago' ? 'Pago' : label;
   return <span className="rounded-full border border-fitblue/30 bg-fitblue/10 px-2.5 py-1 text-xs font-semibold text-fitblue">{display}</span>;
+}
+
+function DashboardAlertList({
+  title,
+  items,
+  empty,
+  tone
+}: {
+  title: string;
+  items: { name: string; reason: string; date: string }[];
+  empty: string;
+  tone: 'blue' | 'orange' | 'green';
+}) {
+  const color = tone === 'blue' ? 'border-fitblue/40 bg-fitblue/10' : tone === 'orange' ? 'border-fitorange/40 bg-fitorange/10' : 'border-fitgreen/40 bg-fitgreen/10';
+  return (
+    <div className={`rounded-md border p-4 ${color}`}>
+      <p className="font-semibold">{title}</p>
+      <div className="mt-3 space-y-2">
+        {items.length ? items.slice(0, 8).map((item) => (
+          <div key={`${title}-${item.name}-${item.reason}-${item.date}`} className="rounded bg-ink/40 px-3 py-2 text-sm text-slate-200">
+            <p className="font-semibold">{item.name}</p>
+            <p className="text-slate-300">{item.reason}</p>
+            <p className="mt-1 text-xs text-slate-500">{item.date}</p>
+          </div>
+        )) : <p className="text-sm text-slate-300">{empty}</p>}
+      </div>
+    </div>
+  );
 }
 
 function AlertBox({ title, items, empty, tone }: { title: string; items: string[]; empty: string; tone: 'blue' | 'orange' | 'green' }) {
