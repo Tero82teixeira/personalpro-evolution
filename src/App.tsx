@@ -240,6 +240,18 @@ function getAssessmentNumber(assessment: PhysicalAssessment, keys: string[]) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function recordField<T>(record: T, keys: string[]) {
+  const source = record as unknown as Record<string, any>;
+  for (const key of keys) {
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') return source[key];
+  }
+  return undefined;
+}
+
+function getWorkoutLogCompletedAt(log: WorkoutLog) {
+  return String(recordField(log, ['completedAt', 'completed_at', 'date', 'createdAt', 'created_at']) ?? '');
+}
+
 function buildAssessmentSummaryBars(firstAssessment?: PhysicalAssessment, latestAssessment?: PhysicalAssessment) {
   if (!firstAssessment) return [];
   const currentAssessment = latestAssessment ?? firstAssessment;
@@ -609,7 +621,7 @@ function AdminDashboard({
   selectedStudentId: string;
   selectedStudent?: Student;
 }) {
-  const active = data.students.filter((student) => student.status === 'ativo').length;
+  const activeStudentsCount = data.students.filter((student) => String(student.status || '').toLowerCase() !== 'inativo').length;
   const studentsWithCheckIn = new Set(data.checkIns.map((item) => item.studentId));
   const studentsWithAssessment = new Set(data.assessments.map((item) => getAssessmentStudentId(item)).filter(Boolean));
   const pendingCheckinStudents = data.students.filter((student) => !studentsWithCheckIn.has(student.id));
@@ -618,7 +630,10 @@ function AdminDashboard({
   const latest = data.assessments.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
   const now = new Date();
   const workoutsToday = data.workoutLogs.filter((log) => {
-    const date = new Date(log.completedAt);
+    const completedAt = getWorkoutLogCompletedAt(log);
+    if (!completedAt) return false;
+    const date = new Date(completedAt);
+    if (Number.isNaN(date.getTime())) return false;
     return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
   }).length;
   const monthRevenue = data.payments
@@ -665,7 +680,7 @@ function AdminDashboard({
 
       <Panel title="Resumo geral da operação">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          <StatCard label="Alunos ativos" value={active} icon={Users} accent="blue" />
+          <StatCard label="Alunos ativos" value={activeStudentsCount} icon={Users} accent="blue" />
           <StatCard label="Check-ins pendentes" value={pendingCheckinStudents.length} icon={CalendarCheck} accent="orange" />
           <StatCard label="Pagamentos pendentes" value={pendingPaymentItems.length} icon={CreditCard} accent="orange" />
           <StatCard label="Evoluções recentes" value={latest.length} icon={LineChart} accent="green" />
