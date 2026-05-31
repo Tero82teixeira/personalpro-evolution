@@ -74,12 +74,13 @@ type AdminTab =
   | 'anamnesis'
   | 'workouts'
   | 'periodization'
+  | 'journey'
   | 'checkins'
   | 'evolution'
   | 'finance'
   | 'messages'
   | 'marketing';
-type StudentTab = 'home' | 'workout' | 'evolution' | 'checkin' | 'profile';
+type StudentTab = 'home' | 'workout' | 'journey' | 'evolution' | 'checkin' | 'profile';
 
 const adminTabs: { id: AdminTab; label: string; icon: IconComponent }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
@@ -88,6 +89,7 @@ const adminTabs: { id: AdminTab; label: string; icon: IconComponent }[] = [
   { id: 'anamnesis', label: 'Anamnese', icon: ShieldCheck },
   { id: 'workouts', label: 'Treinos', icon: Dumbbell },
   { id: 'periodization', label: 'Periodização', icon: CalendarCheck },
+  { id: 'journey', label: 'Jornada', icon: Sparkles },
   { id: 'checkins', label: 'Check-ins', icon: CalendarCheck },
   { id: 'evolution', label: 'Evolução', icon: LineChart },
   { id: 'finance', label: 'Financeiro', icon: CreditCard },
@@ -98,6 +100,7 @@ const adminTabs: { id: AdminTab; label: string; icon: IconComponent }[] = [
 const studentTabs: { id: StudentTab; label: string; icon: IconComponent }[] = [
   { id: 'home', label: 'Início', icon: BarChart3 },
   { id: 'workout', label: 'Treino', icon: Dumbbell },
+  { id: 'journey', label: 'Jornada', icon: Sparkles },
   { id: 'evolution', label: 'Evolução', icon: LineChart },
   { id: 'checkin', label: 'Check-in', icon: CalendarCheck },
   { id: 'profile', label: 'Perfil', icon: UserRound }
@@ -261,6 +264,19 @@ function buildAssessmentSummaryBars(firstAssessment?: PhysicalAssessment, latest
     { name: 'Gordura inicial', valor: getAssessmentNumber(firstAssessment, ['bodyFat', 'body_fat', 'gordura']) },
     { name: 'Gordura atual', valor: getAssessmentNumber(currentAssessment, ['bodyFat', 'body_fat', 'gordura']) }
   ];
+}
+
+function dateKey(value?: string) {
+  if (!value) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function isSameDate(value?: string) {
+  if (!value) return false;
+  return dateKey(value) === dateKey(new Date().toISOString());
 }
 
 function scrollToTop() {
@@ -572,12 +588,13 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
         {tab === 'anamnesis' && selectedStudent && <AnamnesisView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'workouts' && selectedStudent && <WorkoutCrud data={data} student={selectedStudent} user={user} commit={commit} />}
         {tab === 'periodization' && selectedStudent && <PeriodizationView data={data} student={selectedStudent} commit={commit} />}
+        {tab === 'journey' && selectedStudent && <JourneyView data={data} student={selectedStudent} />}
         {tab === 'checkins' && <CheckinsView data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} commit={commit} />}
         {tab === 'evolution' && selectedStudent && <EvolutionView data={data} student={selectedStudent} />}
         {tab === 'finance' && <FinanceView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'messages' && <MessagesView data={data} />}
         {tab === 'marketing' && <MarketingView data={data} />}
-        {tab !== 'dashboard' && data.students.length === 0 && ['assessments', 'anamnesis', 'workouts', 'periodization', 'evolution'].includes(tab) && (
+        {tab !== 'dashboard' && data.students.length === 0 && ['assessments', 'anamnesis', 'workouts', 'periodization', 'journey', 'evolution'].includes(tab) && (
           <Empty title="Base limpa" text="Cadastre um aluno para usar este módulo." />
         )}
       </section>
@@ -598,11 +615,12 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
     <div className="mx-auto max-w-4xl px-4 pb-24 pt-5">
       {tab === 'home' && <StudentDashboard data={data} student={student} />}
       {tab === 'workout' && <StudentWorkout data={data} student={student} commit={commit} />}
+      {tab === 'journey' && <JourneyView data={data} student={student} />}
       {tab === 'evolution' && <EvolutionView data={data} student={student} compact />}
       {tab === 'checkin' && <StudentCheckin data={data} student={student} commit={commit} />}
       {tab === 'profile' && <StudentProfile data={data} student={student} commit={commit} />}
       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-line bg-ink/95 px-2 py-2 backdrop-blur">
-        <div className="mx-auto grid max-w-4xl grid-cols-5 gap-1">
+        <div className="mx-auto grid max-w-4xl grid-cols-6 gap-1">
           {studentTabs.map((item) => (
             <MobileTab key={item.id} active={tab === item.id} icon={item.icon} label={item.label} onClick={() => selectTab(item.id)} />
           ))}
@@ -1860,6 +1878,175 @@ function MarketingView({ data }: { data: AppData }) {
             {copiedId === idea.id && <p className="mt-2 text-sm font-semibold text-fitgreen">Ideia copiada.</p>}
           </Panel>
         ))}
+      </div>
+    </Stack>
+  );
+}
+
+function JourneyView({ data, student }: { data: AppData; student: Student }) {
+  const assessments = data.assessments.filter((item) => getAssessmentStudentId(item) === student.id);
+  const workoutLogs = workoutLogsForStudent(data, student.id);
+  const checkIns = data.checkIns.filter((item) => item.studentId === student.id);
+  const activePeriodization = data.periodizations.find((item) => item.studentId === student.id && item.status === 'ativo');
+  const completedWorkoutsCount = workoutLogs.length;
+  const journeyPhases = [
+    { title: 'Início', description: 'Primeiros passos da jornada.' },
+    { title: 'Adaptação', description: 'Preparar o corpo, aprender técnica e criar consistência.' },
+    { title: 'Consistência', description: 'Manter frequência e transformar treino em rotina.' },
+    { title: 'Evolução', description: 'Aumentar volume e melhorar resistência.' },
+    { title: 'Transformação', description: 'Consolidar resultados e reconhecer a mudança.' }
+  ];
+  const phaseIndex = !assessments.length ? 0 : completedWorkoutsCount === 0 ? 1 : completedWorkoutsCount <= 3 ? 2 : completedWorkoutsCount <= 8 ? 3 : 4;
+  const currentPhase = journeyPhases[phaseIndex];
+  const fallbackJourneyDates = [
+    ...assessments.map((assessment) => getAssessmentDateValue(assessment)),
+    ...workoutLogs.map((log) => getWorkoutLogCompletedAt(log)),
+    ...checkIns.map((checkIn) => checkIn.date)
+  ].map((value) => dateKey(value)).filter(Boolean).sort();
+  const startSource =
+    dateKey(student.startDate) ||
+    dateKey(String(recordField(student, ['createdAt', 'created_at']) ?? '')) ||
+    fallbackJourneyDates[0] ||
+    '';
+  const startDate = startSource ? new Date(`${startSource}T00:00:00`) : undefined;
+  const rawJourneyDay = startDate && !Number.isNaN(startDate.getTime()) ? Math.floor((Date.now() - startDate.getTime()) / 86400000) + 1 : 1;
+  const journeyDay = Math.min(90, Math.max(1, rawJourneyDay));
+  const journeyPercent = Math.min(100, Math.round((journeyDay / 90) * 100));
+  const monthWorkouts = monthWorkoutCount(workoutLogs);
+  const journeyScore =
+    (assessments.length > 0 ? 30 : 0) +
+    (completedWorkoutsCount > 0 ? 25 : 0) +
+    (checkIns.length > 0 ? 20 : 0) +
+    (activePeriodization ? 15 : 0) +
+    (completedWorkoutsCount >= 5 ? 10 : 0);
+  const scoreStatus = journeyScore <= 30 ? 'Começando' : journeyScore <= 60 ? 'Em evolução' : journeyScore <= 80 ? 'Consistente' : 'Excelente';
+  const trainedToday = workoutLogs.some((log) => isSameDate(getWorkoutLogCompletedAt(log)));
+  const checkedInToday = checkIns.some((checkIn) => isSameDate(checkIn.date));
+  const achievements = [
+    { label: 'Primeiro treino concluído', active: completedWorkoutsCount >= 1 },
+    { label: 'Primeiro check-in respondido', active: checkIns.length >= 1 },
+    { label: 'Primeira avaliação registrada', active: assessments.length >= 1 },
+    { label: 'Periodização criada', active: Boolean(activePeriodization) },
+    { label: '5 treinos concluídos', active: completedWorkoutsCount >= 5 },
+    { label: '10 treinos concluídos', active: completedWorkoutsCount >= 10 }
+  ];
+  const dailyGoals = [
+    { label: 'Treino concluído hoje', status: trainedToday ? 'Concluído' : 'Pendente', active: trainedToday, neutral: false },
+    { label: 'Check-in respondido hoje', status: checkedInToday ? 'Concluído' : 'Pendente', active: checkedInToday, neutral: false },
+    { label: 'Água registrada', status: 'Em breve', active: false, neutral: true },
+    { label: 'Sono registrado', status: 'Em breve', active: false, neutral: true }
+  ];
+  const dayPhases = [
+    'Dia 1 a 15 - Adaptação',
+    'Dia 16 a 30 - Consistência',
+    'Dia 31 a 60 - Evolução',
+    'Dia 61 a 90 - Transformação'
+  ];
+
+  return (
+    <Stack>
+      <PageTitle title="Jornada do aluno" subtitle="Acompanhe progresso, consistência e evolução visual." />
+      <Panel title="Aluno selecionado" action={<Badge label={currentPhase.title} />}>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <InfoBox label="Aluno" value={studentDisplayName(student)} />
+          <InfoBox label="Treinos concluídos" value={completedWorkoutsCount} />
+          <InfoBox label="Avaliações registradas" value={assessments.length} />
+          <InfoBox label="Score atual" value={`${journeyScore}/100 - ${scoreStatus}`} />
+        </div>
+      </Panel>
+
+      <Panel title="Avatar de evolução">
+        <div className="grid gap-3 sm:grid-cols-5">
+          {journeyPhases.map((phase, index) => {
+            const active = index <= phaseIndex;
+            const current = index === phaseIndex;
+            return (
+              <div key={phase.title} className={`rounded-lg border p-3 ${active ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-line bg-ink/40'}`}>
+                <div className={`mb-3 grid h-10 w-10 place-items-center rounded-full border text-sm font-black ${current ? 'border-fitblue bg-fitblue text-ink' : active ? 'border-fitgreen text-fitgreen' : 'border-line text-slate-500'}`}>
+                  {index + 1}
+                </div>
+                <p className="font-semibold">{phase.title}</p>
+                <p className="mt-2 text-xs leading-relaxed text-slate-400">{phase.description}</p>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-4 rounded-lg border border-fitblue/20 bg-fitblue/10 p-4">
+          <p className="font-semibold text-fitblue">Fase atual: {currentPhase.title}</p>
+          <p className="mt-1 text-sm text-slate-300">
+            {phaseIndex === 4
+              ? 'Parabéns! Você chegou à fase Transformação. Agora é hora de manter a consistência.'
+              : 'Continue acumulando treinos, check-ins e avaliações para evoluir até a fase Transformação.'}
+          </p>
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Jornada de 90 dias">
+          <div className="space-y-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-3xl font-black text-fitgreen">Dia {journeyDay} de 90</p>
+                <p className="text-sm text-slate-400">{journeyPercent}% concluído</p>
+              </div>
+              <Badge label={startSource ? `Início: ${formatDate(startSource)}` : 'Dia 1'} />
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-ink">
+              <div className="h-full rounded-full bg-fitgreen" style={{ width: `${journeyPercent}%` }} />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {dayPhases.map((phase) => <p key={phase} className="rounded-md border border-line bg-ink/40 px-3 py-2 text-sm text-slate-300">{phase}</p>)}
+            </div>
+          </div>
+        </Panel>
+
+        <Panel title="Score geral de consistência">
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Score geral</p>
+              <p className="text-4xl font-black text-fitblue">{journeyScore}/100</p>
+              <p className="text-sm font-semibold text-slate-300">{scoreStatus}</p>
+              <p className="mt-1 text-xs text-slate-500">Baseado no histórico acumulado do aluno, separado das metas de hoje.</p>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-ink">
+              <div className="h-full rounded-full bg-fitblue" style={{ width: `${journeyScore}%` }} />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <InfoBox label="Avaliação física" value={assessments.length > 0 ? '+30 pontos' : '0 pontos'} />
+              <InfoBox label="Treino concluído" value={completedWorkoutsCount > 0 ? '+25 pontos' : '0 pontos'} />
+              <InfoBox label="Check-in respondido" value={checkIns.length > 0 ? '+20 pontos' : '0 pontos'} />
+              <InfoBox label="Periodização ativa" value={activePeriodization ? '+15 pontos' : '0 pontos'} />
+              <InfoBox label="5 ou mais treinos" value={completedWorkoutsCount >= 5 ? '+10 pontos' : '0 pontos'} />
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Metas de hoje">
+          <div className="space-y-2">
+            {dailyGoals.map((goal) => (
+              <div key={goal.label} className={`flex items-center justify-between gap-3 rounded-md border px-3 py-3 ${goal.neutral ? 'border-fitblue/20 bg-fitblue/5' : 'border-line bg-ink/40'}`}>
+                <div className="flex items-center gap-3">
+                  <span className={`grid h-7 w-7 place-items-center rounded-full border text-xs font-black ${goal.active ? 'border-fitgreen bg-fitgreen text-ink' : goal.neutral ? 'border-fitblue/30 text-fitblue' : 'border-line text-slate-500'}`}>{goal.active ? '✓' : goal.neutral ? '•' : '-'}</span>
+                  <p className="text-sm font-semibold text-slate-200">{goal.label}</p>
+                </div>
+                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${goal.active ? 'border-fitgreen/30 bg-fitgreen/10 text-fitgreen' : goal.neutral ? 'border-fitblue/20 bg-fitblue/5 text-slate-300' : 'border-fitorange/30 bg-fitorange/10 text-fitorange'}`}>{goal.status}</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="Conquistas">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {achievements.map((achievement) => (
+              <div key={achievement.label} className={`rounded-md border px-3 py-3 ${achievement.active ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-line bg-ink/40'}`}>
+                <p className={`text-sm font-semibold ${achievement.active ? 'text-fitgreen' : 'text-slate-400'}`}>{achievement.label}</p>
+                <p className="mt-1 text-xs text-slate-500">{achievement.active ? 'Conquista ativa' : 'Ainda não liberada'}</p>
+              </div>
+            ))}
+          </div>
+        </Panel>
       </div>
     </Stack>
   );
