@@ -621,7 +621,6 @@ function AdminDashboard({
   selectedStudentId: string;
   selectedStudent?: Student;
 }) {
-  const activeStudentsCount = data.students.filter((student) => String(student.status || '').toLowerCase() !== 'inativo').length;
   const studentsWithCheckIn = new Set(data.checkIns.map((item) => item.studentId));
   const studentsWithAssessment = new Set(data.assessments.map((item) => getAssessmentStudentId(item)).filter(Boolean));
   const pendingCheckinStudents = data.students.filter((student) => !studentsWithCheckIn.has(student.id));
@@ -680,7 +679,7 @@ function AdminDashboard({
 
       <Panel title="Resumo geral da operação">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          <StatCard label="Alunos ativos" value={activeStudentsCount} icon={Users} accent="blue" />
+          <StatCard label="Alunos ativos" value={data.students.length} icon={Users} accent="blue" />
           <StatCard label="Check-ins pendentes" value={pendingCheckinStudents.length} icon={CalendarCheck} accent="orange" />
           <StatCard label="Pagamentos pendentes" value={pendingPaymentItems.length} icon={CreditCard} accent="orange" />
           <StatCard label="Evoluções recentes" value={latest.length} icon={LineChart} accent="green" />
