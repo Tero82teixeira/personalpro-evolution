@@ -2076,6 +2076,144 @@ function MarketingView({ data }: { data: AppData }) {
   );
 }
 
+type TimelineEvent = {
+  id: string;
+  icon: string;
+  title: string;
+  date: string;
+  details: string[];
+};
+
+function timelineTimestamp(value?: string) {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
+  const time = new Date(normalized).getTime();
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+}
+
+function formatTimelineDate(value?: string) {
+  if (!value) return 'Sem data';
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return 'Sem data';
+  const formattedDate = formatDate(value);
+  const hasTime = /\d{2}:\d{2}/.test(value) || value.includes('T');
+  return hasTime ? `${formattedDate} às ${formatDateTimeParts(value).time}` : formattedDate;
+}
+
+function studentIdFromRecord<T>(record: T) {
+  return String(recordField(record, ['studentId', 'student_id']) ?? '');
+}
+
+function buildStudentTimeline(studentId: string, data: AppData): TimelineEvent[] {
+  const assessmentEvents = data.assessments
+    .filter((assessment) => getAssessmentStudentId(assessment) === studentId)
+    .map<TimelineEvent>((assessment) => ({
+      id: `assessment-${assessment.id}`,
+      icon: 'A',
+      title: '📏 Avaliação física registrada',
+      date: getAssessmentDateValue(assessment),
+      details: [
+        `Peso: ${getAssessmentNumber(assessment, ['weight', 'peso'])} kg`,
+        `Gordura: ${getAssessmentNumber(assessment, ['bodyFat', 'body_fat', 'gordura'])}%`,
+        assessment.notes ? `Observações: ${assessment.notes}` : ''
+      ].filter(Boolean)
+    }));
+
+  const workoutEvents = data.workoutLogs
+    .filter((log) => studentIdFromRecord(log) === studentId)
+    .map<TimelineEvent>((log) => ({
+      id: `workout-log-${log.id}`,
+      icon: 'T',
+      title: '🏋️ Treino concluído',
+      date: getWorkoutLogCompletedAt(log),
+      details: [`Treino: ${workoutName(data, log.workoutId)}`, `Status: ${log.status === 'concluido' ? 'Concluído' : log.status}`]
+    }));
+
+  const checkInEvents = data.checkIns
+    .filter((checkIn) => studentIdFromRecord(checkIn) === studentId)
+    .map<TimelineEvent>((checkIn) => ({
+      id: `checkin-${checkIn.id}`,
+      icon: 'C',
+      title: '📋 Check-in respondido',
+      date: getCheckInDateValue(checkIn),
+      details: [
+        checkIn.currentWeight ? `Peso atual: ${checkIn.currentWeight} kg` : '',
+        checkIn.energy ? `Energia: ${checkIn.energy}` : '',
+        checkIn.motivation ? `Motivação: ${checkIn.motivation}/10` : '',
+        checkIn.difficulty ? `Dificuldade: ${checkIn.difficulty}` : '',
+        checkIn.victory ? `Vitória: ${checkIn.victory}` : ''
+      ].filter(Boolean)
+    }));
+
+  const periodizationEvents = data.periodizations
+    .filter((periodization) => studentIdFromRecord(periodization) === studentId)
+    .map<TimelineEvent>((periodization) => ({
+      id: `periodization-${periodization.id}`,
+      icon: 'P',
+      title: '📅 Periodização criada',
+      date: periodization.createdAt || periodization.startDate,
+      details: [`Duração: ${periodization.weeks} semanas`, `Status: ${periodization.status}`]
+    }));
+
+  const paymentEvents = data.payments
+    .filter((payment) => studentIdFromRecord(payment) === studentId)
+    .map<TimelineEvent>((payment) => ({
+      id: `payment-${payment.id}`,
+      icon: '$',
+      title: '💰 Registro financeiro',
+      date: payment.dueDate,
+      details: [`Plano: ${payment.plan}`, `Valor: ${formatCurrency(payment.amount)}`, `Status: ${payment.status}`]
+    }));
+
+  return [...assessmentEvents, ...workoutEvents, ...checkInEvents, ...periodizationEvents, ...paymentEvents]
+    .sort((a, b) => timelineTimestamp(b.date) - timelineTimestamp(a.date));
+}
+
+function StudentTimeline({ data, studentId }: { data: AppData; studentId: string }) {
+  const [showAll, setShowAll] = useState(false);
+  const events = buildStudentTimeline(studentId, data);
+  const visibleEvents = showAll ? events : events.slice(0, 10);
+
+  return (
+    <Panel title="Linha do tempo do aluno">
+      {events.length ? (
+        <>
+          <div className="space-y-0">
+            {visibleEvents.map((event, index) => (
+              <div key={event.id} className="grid grid-cols-[34px_1fr] gap-3">
+                <div className="relative flex justify-center">
+                  <span className="z-10 grid h-8 w-8 place-items-center rounded-full border border-fitblue/30 bg-fitblue/10 text-xs font-black text-fitblue">{event.icon}</span>
+                  {index < visibleEvents.length - 1 && <span className="absolute top-8 h-full w-px bg-line" />}
+                </div>
+                <div className="pb-5">
+                  <div className="rounded-lg border border-line bg-ink/40 p-3">
+                    <p className="font-semibold text-slate-100">{event.title}</p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">{formatTimelineDate(event.date)}</p>
+                    <div className="mt-3 space-y-1">
+                      {event.details.map((detail) => <p key={detail} className="text-sm text-slate-300">{detail}</p>)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {events.length > 10 && (
+            <button className="btn-secondary mt-2 w-full sm:w-auto" onClick={() => setShowAll(!showAll)}>
+              {showAll ? 'Mostrar menos' : 'Ver linha do tempo completa'}
+            </button>
+          )}
+        </>
+      ) : (
+        <Empty
+          title="Nenhum evento registrado ainda na jornada deste aluno."
+          text="Quando o aluno fizer avaliações, treinos, check-ins ou pagamentos, eles aparecerão aqui."
+        />
+      )}
+    </Panel>
+  );
+}
+
 function JourneyView({ data, student }: { data: AppData; student: Student }) {
   const assessments = data.assessments.filter((item) => getAssessmentStudentId(item) === student.id);
   const workoutLogs = workoutLogsForStudent(data, student.id);
@@ -2083,11 +2221,11 @@ function JourneyView({ data, student }: { data: AppData; student: Student }) {
   const activePeriodization = data.periodizations.find((item) => item.studentId === student.id && item.status === 'ativo');
   const completedWorkoutsCount = workoutLogs.length;
   const journeyPhases = [
-    { title: 'Início', description: 'Primeiros passos da jornada.' },
-    { title: 'Adaptação', description: 'Preparar o corpo, aprender técnica e criar consistência.' },
-    { title: 'Consistência', description: 'Manter frequência e transformar treino em rotina.' },
-    { title: 'Evolução', description: 'Aumentar volume e melhorar resistência.' },
-    { title: 'Transformação', description: 'Consolidar resultados e reconhecer a mudança.' }
+    { title: '🌱 Início', description: 'Primeiros passos da jornada.' },
+    { title: '💪 Adaptação', description: 'Preparar o corpo, aprender técnica e criar consistência.' },
+    { title: '🔥 Consistência', description: 'Manter frequência e transformar treino em rotina.' },
+    { title: '🚀 Evolução', description: 'Aumentar volume e melhorar resistência.' },
+    { title: '🏆 Transformação', description: 'Consolidar resultados e reconhecer a mudança.' }
   ];
   const phaseIndex = !assessments.length ? 0 : completedWorkoutsCount === 0 ? 1 : completedWorkoutsCount <= 3 ? 2 : completedWorkoutsCount <= 8 ? 3 : 4;
   const currentPhase = journeyPhases[phaseIndex];
@@ -2112,22 +2250,22 @@ function JourneyView({ data, student }: { data: AppData; student: Student }) {
     (checkIns.length > 0 ? 20 : 0) +
     (activePeriodization ? 15 : 0) +
     (completedWorkoutsCount >= 5 ? 10 : 0);
-  const scoreStatus = journeyScore <= 30 ? 'Começando' : journeyScore <= 60 ? 'Em evolução' : journeyScore <= 80 ? 'Consistente' : 'Excelente';
+  const scoreStatus = journeyScore <= 30 ? '🌱 Começando' : journeyScore <= 60 ? '📈 Em evolução' : journeyScore <= 80 ? '🔥 Consistente' : '🏆 Excelente';
   const trainedToday = workoutLogs.some((log) => isSameDate(getWorkoutLogCompletedAt(log)));
   const checkedInToday = checkIns.some((checkIn) => isSameDate(checkIn.date));
   const achievements = [
-    { label: 'Primeiro treino concluído', active: completedWorkoutsCount >= 1 },
-    { label: 'Primeiro check-in respondido', active: checkIns.length >= 1 },
-    { label: 'Primeira avaliação registrada', active: assessments.length >= 1 },
-    { label: 'Periodização criada', active: Boolean(activePeriodization) },
-    { label: '5 treinos concluídos', active: completedWorkoutsCount >= 5 },
-    { label: '10 treinos concluídos', active: completedWorkoutsCount >= 10 }
+    { label: '🏋️ Primeiro treino concluído', active: completedWorkoutsCount >= 1 },
+    { label: '📋 Primeiro check-in respondido', active: checkIns.length >= 1 },
+    { label: '📏 Primeira avaliação registrada', active: assessments.length >= 1 },
+    { label: '📅 Periodização criada', active: Boolean(activePeriodization) },
+    { label: '🔥 5 treinos concluídos', active: completedWorkoutsCount >= 5 },
+    { label: '🏆 10 treinos concluídos', active: completedWorkoutsCount >= 10 }
   ];
   const dailyGoals = [
-    { label: 'Treino concluído hoje', status: trainedToday ? 'Concluído' : 'Pendente', active: trainedToday, neutral: false },
-    { label: 'Check-in respondido hoje', status: checkedInToday ? 'Concluído' : 'Pendente', active: checkedInToday, neutral: false },
-    { label: 'Água registrada', status: 'Em breve', active: false, neutral: true },
-    { label: 'Sono registrado', status: 'Em breve', active: false, neutral: true }
+    { label: '🏋️ Treino concluído hoje', status: trainedToday ? 'Concluído' : 'Pendente', active: trainedToday, neutral: false },
+    { label: '📋 Check-in respondido hoje', status: checkedInToday ? 'Concluído' : 'Pendente', active: checkedInToday, neutral: false },
+    { label: '💧 Água registrada', status: 'Em breve', active: false, neutral: true },
+    { label: '😴 Sono registrado', status: 'Em breve', active: false, neutral: true }
   ];
   const dayPhases = [
     'Dia 1 a 15 - Adaptação',
@@ -2241,6 +2379,8 @@ function JourneyView({ data, student }: { data: AppData; student: Student }) {
           </div>
         </Panel>
       </div>
+
+      <StudentTimeline data={data} studentId={student.id} />
     </Stack>
   );
 }
