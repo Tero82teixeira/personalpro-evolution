@@ -139,6 +139,7 @@ export interface Periodization {
 export interface CheckIn {
   id: string;
   studentId: string;
+  checkinDate?: string;
   date: string;
   trainingsDone: number;
   food: string;
@@ -150,6 +151,7 @@ export interface CheckIn {
   difficulty: string;
   victory: string;
   notes: string;
+  photoUrl?: string;
   photo?: string;
 }
 

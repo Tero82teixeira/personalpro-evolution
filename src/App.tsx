@@ -255,14 +255,54 @@ function getWorkoutLogCompletedAt(log: WorkoutLog) {
   return String(recordField(log, ['completedAt', 'completed_at', 'date', 'createdAt', 'created_at']) ?? '');
 }
 
-function buildAssessmentSummaryBars(firstAssessment?: PhysicalAssessment, latestAssessment?: PhysicalAssessment) {
-  if (!firstAssessment) return [];
-  const currentAssessment = latestAssessment ?? firstAssessment;
+function getStudentEvolutionSummary(student: Student, assessments: PhysicalAssessment[]) {
+  const studentAssessments = assessments
+    .filter((assessment) => getAssessmentStudentId(assessment) === student.id)
+    .sort((a, b) => getAssessmentDateValue(a).localeCompare(getAssessmentDateValue(b)));
+  const firstAssessment = studentAssessments[0];
+  const lastAssessment = studentAssessments[studentAssessments.length - 1];
+  const fallbackInitialWeight = numberOrZero(student.initialWeight);
+  const fallbackCurrentWeight = numberOrZero(student.currentWeight);
+
+  if (firstAssessment && lastAssessment) {
+    return {
+      initialWeight: getAssessmentNumber(firstAssessment, ['weight', 'peso']),
+      currentWeight: getAssessmentNumber(lastAssessment, ['weight', 'peso']),
+      initialBodyFat: getAssessmentNumber(firstAssessment, ['bodyFat', 'body_fat', 'gordura']),
+      currentBodyFat: getAssessmentNumber(lastAssessment, ['bodyFat', 'body_fat', 'gordura']),
+      source: 'Avaliação física',
+      firstAssessment,
+      lastAssessment,
+      assessmentCount: studentAssessments.length,
+      assessments: studentAssessments
+    };
+  }
+
+  return {
+    initialWeight: fallbackInitialWeight,
+    currentWeight: fallbackCurrentWeight,
+    initialBodyFat: 0,
+    currentBodyFat: 0,
+    source: 'Cadastro do aluno',
+    firstAssessment: undefined,
+    lastAssessment: undefined,
+    assessmentCount: 0,
+    assessments: studentAssessments
+  };
+}
+
+function buildEvolutionChartData(summary: ReturnType<typeof getStudentEvolutionSummary>) {
+  if (summary.assessmentCount) {
+    return summary.assessments.map((assessment, index) => ({
+      name: formatDate(getAssessmentDateValue(assessment)).slice(0, 5) || `Avaliação ${index + 1}`,
+      peso: getAssessmentNumber(assessment, ['weight', 'peso']),
+      gordura: getAssessmentNumber(assessment, ['bodyFat', 'body_fat', 'gordura'])
+    }));
+  }
+
   return [
-    { name: 'Peso inicial', valor: getAssessmentNumber(firstAssessment, ['weight', 'peso']) },
-    { name: 'Peso atual', valor: getAssessmentNumber(currentAssessment, ['weight', 'peso']) },
-    { name: 'Gordura inicial', valor: getAssessmentNumber(firstAssessment, ['bodyFat', 'body_fat', 'gordura']) },
-    { name: 'Gordura atual', valor: getAssessmentNumber(currentAssessment, ['bodyFat', 'body_fat', 'gordura']) }
+    { name: 'Peso inicial', peso: summary.initialWeight, gordura: 0 },
+    { name: 'Peso atual', peso: summary.currentWeight, gordura: 0 }
   ];
 }
 
@@ -277,6 +317,14 @@ function dateKey(value?: string) {
 function isSameDate(value?: string) {
   if (!value) return false;
   return dateKey(value) === dateKey(new Date().toISOString());
+}
+
+function getCheckInDateValue(checkIn: CheckIn) {
+  return String(recordField(checkIn, ['checkinDate', 'checkin_date', 'date', 'createdAt', 'created_at']) ?? '');
+}
+
+function getCheckInPhotoUrl(checkIn: CheckIn) {
+  return String(recordField(checkIn, ['photoUrl', 'photo_url', 'photo']) ?? '');
 }
 
 function scrollToTop() {
@@ -666,22 +714,13 @@ function AdminDashboard({
   const selectedCheckIns = selectedStudentId ? data.checkIns.filter((checkIn) => checkIn.studentId === selectedStudentId).sort((a, b) => b.date.localeCompare(a.date)) : [];
   const selectedPayments = selectedStudentId ? data.payments.filter((payment) => payment.studentId === selectedStudentId) : [];
   const selectedPeriodization = selectedStudentId ? data.periodizations.find((periodization) => periodization.studentId === selectedStudentId && periodization.status === 'ativo') : undefined;
-  const getStudentAssessments = (studentId: string) =>
-    data.assessments
-      .filter((assessment) => getAssessmentStudentId(assessment) === studentId)
-      .sort((a, b) => getAssessmentDateValue(a).localeCompare(getAssessmentDateValue(b)));
-  const selectedAssessments = selectedStudentId ? getStudentAssessments(selectedStudentId) : [];
-  const firstAssessment = selectedAssessments[0];
-  const latestSelectedAssessment = selectedAssessments[selectedAssessments.length - 1];
-  const initialWeight = firstAssessment ? getAssessmentNumber(firstAssessment, ['weight', 'peso']) : 0;
-  const currentWeight = latestSelectedAssessment ? getAssessmentNumber(latestSelectedAssessment, ['weight', 'peso']) : 0;
-  const initialBodyFat = firstAssessment ? getAssessmentNumber(firstAssessment, ['bodyFat', 'body_fat', 'gordura']) : 0;
-  const currentBodyFat = latestSelectedAssessment ? getAssessmentNumber(latestSelectedAssessment, ['bodyFat', 'body_fat', 'gordura']) : 0;
+  const evolutionSummary = currentStudent ? getStudentEvolutionSummary(currentStudent, data.assessments) : undefined;
+  const selectedAssessments = evolutionSummary?.assessments ?? [];
   const selectedFinancialStatus = selectedPayments.find((payment) => payment.status === 'atrasado') ?? selectedPayments.find((payment) => payment.status === 'pendente') ?? selectedPayments[0];
-  const selectedChart = buildAssessmentSummaryBars(firstAssessment, latestSelectedAssessment);
+  const selectedChart = evolutionSummary ? buildEvolutionChartData(evolutionSummary) : [];
   const hasSelectedStudentData = Boolean(
     currentStudent &&
-      (selectedWorkoutLogs.length || selectedCheckIns.length || selectedPayments.length || selectedPeriodization || selectedAssessments.length)
+      (selectedWorkoutLogs.length || selectedCheckIns.length || selectedPayments.length || selectedPeriodization || selectedAssessments.length || evolutionSummary?.initialWeight || evolutionSummary?.currentWeight)
   );
   const inactiveWorkoutAlerts = data.students
     .map((student) => {
@@ -710,13 +749,13 @@ function AdminDashboard({
         {currentStudent ? (
           <Stack>
             {!hasSelectedStudentData && <Empty title="Este aluno ainda não possui dados suficientes." text="Registre treinos, check-ins, pagamentos ou periodização para enriquecer o resumo." />}
-            {!selectedAssessments.length && <Empty title="Este aluno ainda não possui avaliação física registrada." text="Cadastre uma avaliação para preencher peso, gordura e gráfico no Dashboard." />}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <InfoBox label="Nome do aluno" value={studentDisplayName(currentStudent)} />
-              <InfoBox label="Peso inicial" value={firstAssessment ? `${initialWeight} kg` : 'Sem avaliação'} />
-              <InfoBox label="Peso atual" value={latestSelectedAssessment ? `${currentWeight} kg` : 'Sem avaliação'} />
-              <InfoBox label="Gordura inicial" value={firstAssessment ? `${initialBodyFat}%` : 'Sem avaliação'} />
-              <InfoBox label="Gordura atual" value={latestSelectedAssessment ? `${currentBodyFat}%` : 'Sem avaliação'} />
+              <InfoBox label="Peso inicial" value={`${evolutionSummary?.initialWeight ?? 0} kg`} />
+              <InfoBox label="Peso atual" value={`${evolutionSummary?.currentWeight ?? 0} kg`} />
+              <InfoBox label="Gordura inicial" value={evolutionSummary?.assessmentCount ? `${evolutionSummary.initialBodyFat}%` : 'Sem avaliação'} />
+              <InfoBox label="Gordura atual" value={evolutionSummary?.assessmentCount ? `${evolutionSummary.currentBodyFat}%` : 'Sem avaliação'} />
+              <InfoBox label="Fonte dos dados" value={evolutionSummary?.source ?? '-'} />
               <InfoBox label="Último treino realizado" value={selectedLatestWorkoutLog ? workoutName(data, selectedLatestWorkoutLog.workoutId) : 'Sem registros'} />
               <InfoBox label="Data do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.date : 'Sem registros'} />
               <InfoBox label="Hora do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.time : 'Sem registros'} />
@@ -729,7 +768,7 @@ function AdminDashboard({
             </div>
 
             <Panel title="Peso e gordura do aluno">
-              {selectedAssessments.length ? (
+              {selectedChart.length ? (
                 <>
                   <div className="h-72">
                     <ResponsiveContainer width="100%" height="100%">
@@ -738,12 +777,13 @@ function AdminDashboard({
                         <XAxis dataKey="name" stroke="#94a3b8" />
                         <YAxis stroke="#94a3b8" />
                         <Tooltip contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }} />
-                        <Bar dataKey="valor" name="Valor" fill="#35e68c" radius={[6, 6, 0, 0]} />
+                        <Bar dataKey="peso" name="Peso (kg)" fill="#35e68c" radius={[6, 6, 0, 0]} />
+                        <Bar dataKey="gordura" name="Gordura (%)" fill="#38bdf8" radius={[6, 6, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
                 </>
-              ) : <Empty title="Este aluno ainda não possui avaliação física registrada." text="O gráfico será exibido quando houver pelo menos uma avaliação." />}
+              ) : <Empty title="Este aluno ainda não possui dados de peso." text="Informe peso no cadastro ou registre uma avaliação física." />}
               <p className="mt-3 text-xs text-slate-500">Total de avaliações carregadas: {data.assessments.length}</p>
               <p className="text-xs text-slate-500">Total do aluno selecionado: {selectedAssessments.length}</p>
             </Panel>
@@ -814,6 +854,7 @@ function StudentCrud({
   const [linkStudentEmail, setLinkStudentEmail] = useState('');
   const [linkProfileEmail, setLinkProfileEmail] = useState('');
   const [linkProfileId, setLinkProfileId] = useState('');
+  const [isEditing, setIsEditing] = useState(true);
   const studentProfiles = data.users.filter((user) => user.role === 'student');
   const handleEditStudent = (student: Student) => {
     setForm({
@@ -839,6 +880,7 @@ function StudentCrud({
     setAccessEmail(student.email || '');
     setAccessMessage('');
     setCopyFeedback('');
+    setIsEditing(false);
   };
   const startNewStudent = () => {
     onSelect('');
@@ -848,6 +890,7 @@ function StudentCrud({
     setAccessMessage('');
     setSystemLink(getDefaultSystemLink());
     setCopyFeedback('');
+    setIsEditing(true);
   };
   const selectStudentForEdit = (studentId: string) => {
     onSelect(studentId);
@@ -860,6 +903,7 @@ function StudentCrud({
       setAccessEmail('');
       setAccessMessage('');
       setCopyFeedback('');
+      setIsEditing(true);
       return;
     }
     const student = data.students.find((item) => item.id === selectedStudentId) ?? selectedStudent;
@@ -868,6 +912,7 @@ function StudentCrud({
       setAccessEmail('');
       setAccessMessage('');
       setCopyFeedback('');
+      setIsEditing(true);
       return;
     }
     handleEditStudent(student);
@@ -884,6 +929,7 @@ function StudentCrud({
       onSelect(savedStudent.id);
       setForm(savedStudent);
       setAccessEmail(savedStudent.email);
+      setIsEditing(false);
     } catch (error) {
       console.error('Erro ao salvar aluno:', error);
       window.alert(error instanceof Error ? error.message : 'Não foi possível salvar o aluno.');
@@ -908,6 +954,7 @@ function StudentCrud({
       onSelect(remainingStudents[0]?.id ?? '');
       setForm({ ...emptyStudent });
       setAccessEmail('');
+      setIsEditing(true);
     } catch (error) {
       console.error('Erro ao excluir aluno:', error);
       window.alert('Não foi possível excluir o aluno. Tente novamente.');
@@ -1002,31 +1049,43 @@ Qualquer dúvida, me chama por aqui.`;
           <Plus size={16} /> Novo aluno
         </button>
       </div>
-      <Panel key={form.id || 'new-student'} title={form.id ? `Editando aluno: ${studentDisplayName(form) || studentDisplayName(selectedStudent)}` : 'Novo aluno'}>
+      <Panel key={form.id || 'new-student'} title={form.id ? `Aluno: ${studentDisplayName(form) || studentDisplayName(selectedStudent)}` : 'Novo aluno'}>
+        {form.id && <FormModeNotice editing={isEditing} />}
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <Input label="Nome completo" value={form.fullName} onChange={(value) => setForm({ ...form, fullName: value })} required />
-          <Input label="E-mail principal" type="email" value={form.email} onChange={(value) => setForm({ ...form, email: value })} required />
-          <Input label="Telefone / WhatsApp" value={form.phone} onChange={(value) => setForm({ ...form, phone: value })} />
-          <Input label="Data de nascimento" type="date" value={form.birthDate} onChange={(value) => setForm({ ...form, birthDate: value })} />
-          <Select label="Sexo" value={form.sex} onChange={(value) => setForm({ ...form, sex: value })} options={[['Feminino', 'Feminino'], ['Masculino', 'Masculino'], ['Outro', 'Outro']]} />
-          <Input label="Objetivo principal" value={form.goal} onChange={(value) => setForm({ ...form, goal: value })} />
-          <Select label="Nível" value={form.level} onChange={(value) => setForm({ ...form, level: value as Student['level'] })} options={[['iniciante', 'Iniciante'], ['intermediario', 'Intermediário'], ['avancado', 'Avançado']]} />
-          <Select label="Status" value={form.status} onChange={(value) => setForm({ ...form, status: value as Student['status'] })} options={[['ativo', 'Ativo'], ['inativo', 'Inativo'], ['teste', 'Teste'], ['pendente', 'Pendente']]} />
+          <Input label="Nome completo" value={form.fullName} onChange={(value) => setForm({ ...form, fullName: value })} required disabled={!isEditing} />
+          <Input label="E-mail principal" type="email" value={form.email} onChange={(value) => setForm({ ...form, email: value })} required disabled={!isEditing} />
+          <Input label="Telefone / WhatsApp" value={form.phone} onChange={(value) => setForm({ ...form, phone: value })} disabled={!isEditing} />
+          <Input label="Data de nascimento" type="date" value={form.birthDate} onChange={(value) => setForm({ ...form, birthDate: value })} disabled={!isEditing} />
+          <Select label="Sexo" value={form.sex} onChange={(value) => setForm({ ...form, sex: value })} disabled={!isEditing} options={[['Feminino', 'Feminino'], ['Masculino', 'Masculino'], ['Outro', 'Outro']]} />
+          <Input label="Objetivo principal" value={form.goal} onChange={(value) => setForm({ ...form, goal: value })} disabled={!isEditing} />
+          <Select label="Nível" value={form.level} onChange={(value) => setForm({ ...form, level: value as Student['level'] })} disabled={!isEditing} options={[['iniciante', 'Iniciante'], ['intermediario', 'Intermediário'], ['avancado', 'Avançado']]} />
+          <Select label="Status" value={form.status} onChange={(value) => setForm({ ...form, status: value as Student['status'] })} disabled={!isEditing} options={[['ativo', 'Ativo'], ['inativo', 'Inativo'], ['teste', 'Teste'], ['pendente', 'Pendente']]} />
           <Select
             label="Perfil vinculado"
             value={form.profileId ?? ''}
             onChange={(value) => setForm({ ...form, profileId: value })}
+            disabled={!isEditing}
             options={[['', 'Sem vínculo'], ...studentProfiles.map((profile) => [profile.id, `${profile.name || profile.email || profile.id} (${profile.role})`] as [string, string])]}
           />
-          <Input label="E-mail de acesso do aluno" type="email" value={accessEmail} onChange={setAccessEmail} />
-          <Input label="Plano contratado" value={form.plan} onChange={(value) => setForm({ ...form, plan: value })} />
-          <Input label="Data de início" type="date" value={form.startDate} onChange={(value) => setForm({ ...form, startDate: value })} />
-          <Input label="Peso inicial" type="number" value={String(form.initialWeight)} onChange={(value) => setForm({ ...form, initialWeight: Number(value) })} />
-          <Input label="Peso atual" type="number" value={String(form.currentWeight)} onChange={(value) => setForm({ ...form, currentWeight: Number(value) })} />
-          <Textarea label="Meta" value={form.target} onChange={(value) => setForm({ ...form, target: value })} />
-          <Textarea label="Observações internas" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} />
+          <Input label="E-mail de acesso do aluno" type="email" value={accessEmail} onChange={setAccessEmail} disabled={!isEditing} />
+          <Input label="Plano contratado" value={form.plan} onChange={(value) => setForm({ ...form, plan: value })} disabled={!isEditing} />
+          <Input label="Data de início" type="date" value={form.startDate} onChange={(value) => setForm({ ...form, startDate: value })} disabled={!isEditing} />
+          <Input label="Peso inicial" type="number" value={String(form.initialWeight)} onChange={(value) => setForm({ ...form, initialWeight: Number(value) })} disabled={!isEditing} />
+          <Input label="Peso atual" type="number" value={String(form.currentWeight)} onChange={(value) => setForm({ ...form, currentWeight: Number(value) })} disabled={!isEditing} />
+          <Textarea label="Meta" value={form.target} onChange={(value) => setForm({ ...form, target: value })} disabled={!isEditing} />
+          <Textarea label="Observações internas" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} disabled={!isEditing} />
         </div>
-        <button className="btn-primary mt-4 w-full sm:w-auto" onClick={save}>Salvar aluno</button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {isEditing ? (
+            <>
+              <button className="btn-primary w-full sm:w-auto" onClick={save}>{form.id ? 'Salvar alterações' : 'Salvar aluno'}</button>
+              {form.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => { const original = data.students.find((item) => item.id === form.id); if (original) handleEditStudent(original); }}>Cancelar</button>}
+            </>
+          ) : (
+            <button className="btn-secondary w-full sm:w-auto" onClick={() => setIsEditing(true)}>Editar aluno</button>
+          )}
+          {form.id && <button className="btn-danger w-full sm:w-auto" onClick={() => deleteStudent(form)}>Excluir aluno</button>}
+        </div>
       </Panel>
       <Panel title="Vincular login do aluno">
         <div className="grid gap-3 md:grid-cols-3">
@@ -1105,10 +1164,19 @@ function Assessments({ data, student, commit }: { data: AppData; student: Studen
     photos: [],
     notes: ''
   });
-  const [form, setForm] = useState<PhysicalAssessment>(() => createAssessmentForm(student));
+  const studentAssessments = data.assessments.filter((item) => getAssessmentStudentId(item) === student.id).sort((a, b) => getAssessmentDateValue(b).localeCompare(getAssessmentDateValue(a)));
+  const latestStudentAssessment = studentAssessments[0];
+  const [form, setForm] = useState<PhysicalAssessment>(() => latestStudentAssessment ? { ...latestStudentAssessment } : createAssessmentForm(student));
+  const [isAssessmentEditing, setIsAssessmentEditing] = useState(false);
+  const [isCreatingAssessment, setIsCreatingAssessment] = useState(false);
   useEffect(() => {
-    setForm(createAssessmentForm(student));
-  }, [student.id]);
+    const latest = data.assessments
+      .filter((item) => getAssessmentStudentId(item) === student.id)
+      .sort((a, b) => getAssessmentDateValue(b).localeCompare(getAssessmentDateValue(a)))[0];
+    setForm(latest ? { ...latest } : createAssessmentForm(student));
+    setIsAssessmentEditing(false);
+    setIsCreatingAssessment(false);
+  }, [student.id, data.assessments]);
   const fields: [keyof PhysicalAssessment, string][] = [
     ['weight', 'Peso'], ['height', 'Altura'], ['bodyFat', '% gordura'], ['leanMass', 'Massa magra'], ['fatMass', 'Massa gorda'], ['abdomen', 'Abdômen'], ['waist', 'Cintura'], ['hip', 'Quadril'], ['rightArm', 'Braço dir.'], ['leftArm', 'Braço esq.'], ['rightThigh', 'Coxa dir.'], ['leftThigh', 'Coxa esq.'], ['rightCalf', 'Panturrilha dir.'], ['leftCalf', 'Panturrilha esq.']
   ];
@@ -1151,8 +1219,10 @@ function Assessments({ data, student, commit }: { data: AppData; student: Studen
         ...data,
         assessments: [...data.assessments.filter((item) => item.id !== nextAssessment.id && item.id !== savedAssessment.id), savedAssessment],
         students: data.students.map((item) => (item.id === student.id ? updatedStudent : item))
-      }, form.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
-      setForm(createAssessmentForm(updatedStudent));
+      }, form.id ? 'Avaliação atualizada com sucesso.' : 'Avaliação salva com sucesso.');
+      setForm(savedAssessment);
+      setIsAssessmentEditing(false);
+      setIsCreatingAssessment(false);
     } catch (error) {
       console.error('Erro ao salvar avaliação:', error);
       window.alert('Não foi possível salvar a avaliação. Verifique se o aluno está selecionado e se os campos estão preenchidos corretamente.');
@@ -1160,14 +1230,59 @@ function Assessments({ data, student, commit }: { data: AppData; student: Studen
   };
   const editAssessment = (assessment: PhysicalAssessment) => {
     setForm({ ...assessment });
+    setIsAssessmentEditing(true);
+    setIsCreatingAssessment(false);
     scrollToTop();
   };
+  const viewAssessment = (assessment: PhysicalAssessment) => {
+    setForm({ ...assessment });
+    setIsAssessmentEditing(false);
+    setIsCreatingAssessment(false);
+    scrollToTop();
+  };
+  const startNewAssessment = () => {
+    setForm(createAssessmentForm(student));
+    setIsAssessmentEditing(true);
+    setIsCreatingAssessment(true);
+  };
+  const cancelAssessmentEdit = () => {
+    if (isCreatingAssessment) {
+      if (latestStudentAssessment) {
+        setForm({ ...latestStudentAssessment });
+        setIsCreatingAssessment(false);
+        setIsAssessmentEditing(false);
+      } else {
+        setForm(createAssessmentForm(student));
+        setIsCreatingAssessment(false);
+        setIsAssessmentEditing(false);
+      }
+      return;
+    }
+    const original = data.assessments.find((item) => item.id === form.id);
+    if (original) {
+      setForm({ ...original });
+      setIsAssessmentEditing(false);
+    }
+  };
+  const deleteCurrentAssessment = () => {
+    if (!form.id) return;
+    deleteAssessment(form);
+  };
+  const shouldShowForm = isCreatingAssessment || Boolean(form.id);
+  const isLocked = Boolean(form.id) && !isAssessmentEditing;
   const deleteAssessment = async (assessment: PhysicalAssessment) => {
     if (!window.confirm('Tem certeza que deseja excluir esta avaliação?')) return;
     try {
       await deleteAssessmentRemote(assessment.id);
       commit({ ...data, assessments: data.assessments.filter((item) => item.id !== assessment.id) }, 'Excluído com sucesso.');
-      if (form.id === assessment.id) setForm(createAssessmentForm(student));
+      if (form.id === assessment.id) {
+        const remaining = data.assessments
+          .filter((item) => item.id !== assessment.id && getAssessmentStudentId(item) === student.id)
+          .sort((a, b) => getAssessmentDateValue(b).localeCompare(getAssessmentDateValue(a)));
+        setForm(remaining[0] ? { ...remaining[0] } : createAssessmentForm(student));
+        setIsAssessmentEditing(false);
+        setIsCreatingAssessment(false);
+      }
     } catch (error) {
       console.error('Erro ao excluir avaliação:', error);
       window.alert('Não foi possível excluir a avaliação.');
@@ -1177,21 +1292,45 @@ function Assessments({ data, student, commit }: { data: AppData; student: Studen
   return (
     <Stack>
       <PageTitle title="Avaliação física" subtitle={`${student.fullName} - IMC calculado: ${calculateImc(Number(form.weight), Number(form.height))}`} />
-      <Panel title={form.id ? 'Editar avaliação' : 'Nova avaliação'}>
-        <div className="grid gap-3 md:grid-cols-3">
-          <Input label="Data da avaliação" type="date" value={form.date} onChange={(value) => setForm({ ...form, date: value })} />
-          {fields.map(([key, label]) => (
-            <Input key={String(key)} label={label} type="number" value={String(form[key] ?? 0)} onChange={(value) => setForm({ ...form, [key]: parseAssessmentNumber(value) })} />
-          ))}
-          <ImageUpload label="Fotos de evolução" value={form.photos} onChange={(photos) => setForm({ ...form, photos })} multiple />
-          <Textarea label="Observações" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} />
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button className="btn-primary w-full sm:w-auto" onClick={save}>{form.id ? 'Atualizar avaliação' : 'Salvar avaliação'}</button>
-          {form.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => setForm(createAssessmentForm(student))}>Nova avaliação</button>}
-        </div>
-      </Panel>
-      <HistoryList assessments={data.assessments.filter((item) => item.studentId === student.id)} onEdit={editAssessment} onDelete={deleteAssessment} />
+      {shouldShowForm ? (
+        <Panel title={isCreatingAssessment ? 'Nova avaliação' : 'Avaliação selecionada'}>
+          {isCreatingAssessment ? <p className="mb-4 rounded-md border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm text-fitgreen">Nova avaliação.</p> : <FormModeNotice editing={isAssessmentEditing} />}
+          <div className="grid gap-3 md:grid-cols-3">
+            <Input label="Data da avaliação" type="date" value={form.date} onChange={(value) => setForm({ ...form, date: value })} disabled={isLocked} />
+            {fields.map(([key, label]) => (
+              <Input key={String(key)} label={label} type="number" value={String(form[key] ?? 0)} onChange={(value) => setForm({ ...form, [key]: parseAssessmentNumber(value) })} disabled={isLocked} />
+            ))}
+            <ImageUpload label="Fotos de evolução" value={form.photos} onChange={(photos) => setForm({ ...form, photos })} multiple disabled={isLocked} />
+            <Textarea label="Observações" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} disabled={isLocked} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {isCreatingAssessment ? (
+              <>
+                <button className="btn-primary w-full sm:w-auto" onClick={save}>Salvar avaliação</button>
+                <button className="btn-secondary w-full sm:w-auto" onClick={cancelAssessmentEdit}>Cancelar</button>
+              </>
+            ) : isAssessmentEditing ? (
+              <>
+                <button className="btn-primary w-full sm:w-auto" onClick={save}>Salvar alterações</button>
+                <button className="btn-secondary w-full sm:w-auto" onClick={cancelAssessmentEdit}>Cancelar</button>
+                <button className="btn-danger w-full sm:w-auto" onClick={deleteCurrentAssessment}>Excluir avaliação</button>
+              </>
+            ) : (
+              <>
+                <button className="btn-secondary w-full sm:w-auto" onClick={startNewAssessment}>Nova avaliação</button>
+                <button className="btn-secondary w-full sm:w-auto" onClick={() => setIsAssessmentEditing(true)}>Editar avaliação</button>
+                <button className="btn-danger w-full sm:w-auto" onClick={deleteCurrentAssessment}>Excluir avaliação</button>
+              </>
+            )}
+          </div>
+        </Panel>
+      ) : (
+        <Panel title="Avaliação física">
+          <Empty title="Este aluno ainda não possui avaliação física." text="Crie a primeira avaliação para iniciar o histórico de evolução." />
+          <button className="btn-primary mt-4 w-full sm:w-auto" onClick={startNewAssessment}>Nova avaliação</button>
+        </Panel>
+      )}
+      <HistoryList assessments={studentAssessments} onView={viewAssessment} onEdit={editAssessment} onDelete={deleteAssessment} />
     </Stack>
   );
 }
@@ -1284,6 +1423,7 @@ function AnamnesisView({ data, student, commit }: { data: AppData; student: Stud
     <Stack>
       <PageTitle title="Anamnese e estilo de vida" subtitle={studentDisplayName(student)} />
       <Panel title="Formulário completo">
+        {editing && <FormModeNotice editing />}
         {editing ? (
           <>
             <div className="grid gap-3 md:grid-cols-2">
@@ -1310,7 +1450,10 @@ function AnamnesisView({ data, student, commit }: { data: AppData; student: Stud
                 options={[['', 'Selecionar'], ['academia', 'Academia'], ['casa', 'Casa'], ['praia', 'Praia'], ['ar livre', 'Ar livre'], ['outro', 'Outro']]}
               />
             </div>
-            <button className="btn-primary mt-4 w-full sm:w-auto" onClick={save}>Salvar anamnese</button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button className="btn-primary w-full sm:w-auto" onClick={save}>{form.id ? 'Salvar alterações' : 'Salvar anamnese'}</button>
+              {form.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => { setForm(createAnamnesisForm(student, anamnesis)); setEditing(false); }}>Cancelar</button>}
+            </div>
           </>
         ) : (
           items.length ? (
@@ -1351,8 +1494,10 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
     exercises: [emptyExercise()]
   });
   const [workout, setWorkout] = useState<Workout>(() => createWorkoutForm(student.id));
+  const [isEditing, setIsEditing] = useState(true);
   useEffect(() => {
     setWorkout(createWorkoutForm(student.id));
+    setIsEditing(true);
   }, [student.id]);
   const save = async () => {
     if (!workout.name) return;
@@ -1361,7 +1506,8 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
       const remoteId = await saveWorkoutRemote(nextWorkout, user.id);
       const savedWorkout = { ...nextWorkout, id: remoteId ?? nextWorkout.id };
       commit({ ...data, workouts: [...data.workouts.filter((item) => item.id !== nextWorkout.id), savedWorkout] }, workout.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
-      setWorkout(createWorkoutForm(student.id));
+      setWorkout(savedWorkout);
+      setIsEditing(false);
     } catch (error) {
       console.error('Erro ao salvar treino:', error);
       window.alert(error instanceof Error ? error.message : 'Não foi possível salvar o treino.');
@@ -1369,6 +1515,7 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
   };
   const editWorkout = (item: Workout) => {
     setWorkout({ ...item, exercises: item.exercises.map((exercise) => ({ ...exercise })) });
+    setIsEditing(false);
     scrollToTop();
   };
   const deleteWorkout = async (item: Workout) => {
@@ -1380,7 +1527,10 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
         workouts: data.workouts.filter((workoutItem) => workoutItem.id !== item.id),
         workoutLogs: data.workoutLogs.filter((log) => log.workoutId !== item.id)
       }, 'Excluído com sucesso.');
-      if (workout.id === item.id) setWorkout(createWorkoutForm(student.id));
+      if (workout.id === item.id) {
+        setWorkout(createWorkoutForm(student.id));
+        setIsEditing(true);
+      }
     } catch (error) {
       console.error('Erro ao excluir treino:', error);
       window.alert('Não foi possível excluir o treino.');
@@ -1390,28 +1540,34 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
   return (
     <Stack>
       <PageTitle title="Criação de treinos" subtitle={`Treinos personalizados para ${studentDisplayName(student)}.`} />
-      <Panel title={workout.id ? 'Editar treino' : 'Treino personalizado'}>
+      <Panel title={workout.id ? 'Treino selecionado' : 'Treino personalizado'}>
+        {workout.id && <FormModeNotice editing={isEditing} />}
         <div className="grid gap-3 md:grid-cols-3">
-          <Input label="Nome do treino" value={workout.name} onChange={(value) => setWorkout({ ...workout, name: value })} />
-          <Input label="Objetivo" value={workout.objective} onChange={(value) => setWorkout({ ...workout, objective: value })} />
-          <Select label="Nível" value={workout.level} onChange={(value) => setWorkout({ ...workout, level: value as Workout['level'] })} options={[['iniciante', 'Iniciante'], ['intermediario', 'Intermediário'], ['avancado', 'Avançado']]} />
-          <Select label="Local" value={workout.place} onChange={(value) => setWorkout({ ...workout, place: value as Workout['place'] })} options={[['academia', 'Academia'], ['casa', 'Casa'], ['praia', 'Praia'], ['funcional', 'Funcional'], ['musculacao', 'Musculação'], ['caminhada', 'Caminhada'], ['outro', 'Outro']]} />
-          <Input label="Duração estimada" value={workout.estimatedDuration} onChange={(value) => setWorkout({ ...workout, estimatedDuration: value })} />
-          <Input label="Frequência semanal" value={workout.weeklyFrequency} onChange={(value) => setWorkout({ ...workout, weeklyFrequency: value })} />
-          <Input label="Data de início" type="date" value={workout.startDate} onChange={(value) => setWorkout({ ...workout, startDate: value })} />
-          <Input label="Data de término" type="date" value={workout.endDate} onChange={(value) => setWorkout({ ...workout, endDate: value })} />
-          <Textarea label="Observações gerais" value={workout.notes} onChange={(value) => setWorkout({ ...workout, notes: value })} />
+          <Input label="Nome do treino" value={workout.name} onChange={(value) => setWorkout({ ...workout, name: value })} disabled={Boolean(workout.id) && !isEditing} />
+          <Input label="Objetivo" value={workout.objective} onChange={(value) => setWorkout({ ...workout, objective: value })} disabled={Boolean(workout.id) && !isEditing} />
+          <Select label="Nível" value={workout.level} onChange={(value) => setWorkout({ ...workout, level: value as Workout['level'] })} disabled={Boolean(workout.id) && !isEditing} options={[['iniciante', 'Iniciante'], ['intermediario', 'Intermediário'], ['avancado', 'Avançado']]} />
+          <Select label="Local" value={workout.place} onChange={(value) => setWorkout({ ...workout, place: value as Workout['place'] })} disabled={Boolean(workout.id) && !isEditing} options={[['academia', 'Academia'], ['casa', 'Casa'], ['praia', 'Praia'], ['funcional', 'Funcional'], ['musculacao', 'Musculação'], ['caminhada', 'Caminhada'], ['outro', 'Outro']]} />
+          <Input label="Duração estimada" value={workout.estimatedDuration} onChange={(value) => setWorkout({ ...workout, estimatedDuration: value })} disabled={Boolean(workout.id) && !isEditing} />
+          <Input label="Frequência semanal" value={workout.weeklyFrequency} onChange={(value) => setWorkout({ ...workout, weeklyFrequency: value })} disabled={Boolean(workout.id) && !isEditing} />
+          <Input label="Data de início" type="date" value={workout.startDate} onChange={(value) => setWorkout({ ...workout, startDate: value })} disabled={Boolean(workout.id) && !isEditing} />
+          <Input label="Data de término" type="date" value={workout.endDate} onChange={(value) => setWorkout({ ...workout, endDate: value })} disabled={Boolean(workout.id) && !isEditing} />
+          <Textarea label="Observações gerais" value={workout.notes} onChange={(value) => setWorkout({ ...workout, notes: value })} disabled={Boolean(workout.id) && !isEditing} />
         </div>
         <h3 className="mt-6 font-semibold">Exercícios</h3>
         <div className="mt-3 space-y-3">
           {workout.exercises.map((exercise, index) => (
-            <ExerciseEditor key={exercise.id} exercise={exercise} onChange={(next) => setWorkout({ ...workout, exercises: workout.exercises.map((item, itemIndex) => (itemIndex === index ? next : item)) })} />
+            <ExerciseEditor key={exercise.id} exercise={exercise} disabled={Boolean(workout.id) && !isEditing} onChange={(next) => setWorkout({ ...workout, exercises: workout.exercises.map((item, itemIndex) => (itemIndex === index ? next : item)) })} />
           ))}
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
-          <button className="btn-secondary w-full sm:w-auto" onClick={() => setWorkout({ ...workout, exercises: [...workout.exercises, emptyExercise()] })}><Plus size={16} /> Exercício</button>
-          <button className="btn-primary w-full sm:w-auto" onClick={save}>{workout.id ? 'Atualizar treino' : 'Salvar treino'}</button>
-          {workout.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => setWorkout(createWorkoutForm(student.id))}>Novo treino</button>}
+          {isEditing && <button className="btn-secondary w-full sm:w-auto" onClick={() => setWorkout({ ...workout, exercises: [...workout.exercises, emptyExercise()] })}><Plus size={16} /> Exercício</button>}
+          {workout.id && !isEditing ? (
+            <button className="btn-secondary w-full sm:w-auto" onClick={() => setIsEditing(true)}>Editar treino</button>
+          ) : (
+            <button className="btn-primary w-full sm:w-auto" onClick={save}>{workout.id ? 'Salvar alterações' : 'Salvar treino'}</button>
+          )}
+          {workout.id && isEditing && <button className="btn-secondary w-full sm:w-auto" onClick={() => { const original = data.workouts.find((item) => item.id === workout.id); if (original) { setWorkout({ ...original, exercises: original.exercises.map((exercise) => ({ ...exercise })) }); setIsEditing(false); } }}>Cancelar</button>}
+          {workout.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => { setWorkout(createWorkoutForm(student.id)); setIsEditing(true); }}>Novo treino</button>}
         </div>
       </Panel>
       <div className="grid gap-3 lg:grid-cols-2">
@@ -1467,6 +1623,11 @@ function buildPeriodizationPhases(weeks: 4 | 8 | 12): PeriodizationPhase[] {
 function PeriodizationView({ data, student, commit }: { data: AppData; student: Student; commit: (data: AppData, message?: string) => void }) {
   const [weeks, setWeeks] = useState<4 | 8 | 12>(8);
   const periodization = data.periodizations.find((item) => item.studentId === student.id);
+  const [isEditing, setIsEditing] = useState(!periodization);
+  useEffect(() => {
+    setWeeks(periodization?.weeks ?? 8);
+    setIsEditing(!periodization);
+  }, [student.id, periodization?.id]);
   const previewPhases = buildPeriodizationPhases(weeks);
   const savePeriodization = async () => {
     if (periodization && !window.confirm('Este aluno já possui uma periodização. Deseja substituir?')) return;
@@ -1490,13 +1651,17 @@ function PeriodizationView({ data, student, commit }: { data: AppData; student: 
           ? data.periodizations.map((item) => (item.id === periodization.id ? savedPeriodization : item))
           : [...data.periodizations, savedPeriodization]
       }, periodization ? 'Periodização atualizada com sucesso.' : 'Periodização criada com sucesso.');
+      setIsEditing(false);
     } catch (error) {
       console.error('Erro ao salvar periodização:', error);
       window.alert('Não foi possível salvar a periodização.');
     }
   };
   const editPeriodization = () => {
-    if (periodization) setWeeks(periodization.weeks);
+    if (periodization) {
+      setWeeks(periodization.weeks);
+      setIsEditing(true);
+    }
   };
   const deletePeriodization = async () => {
     if (!periodization) return;
@@ -1504,6 +1669,7 @@ function PeriodizationView({ data, student, commit }: { data: AppData; student: 
     try {
       await deletePeriodizationRemote(periodization.id);
       commit({ ...data, periodizations: data.periodizations.filter((item) => item.id !== periodization.id) }, 'Periodização excluída com sucesso.');
+      setIsEditing(true);
     } catch (error) {
       console.error('Erro ao excluir periodização:', error);
       window.alert('Não foi possível excluir a periodização.');
@@ -1513,8 +1679,9 @@ function PeriodizationView({ data, student, commit }: { data: AppData; student: 
     <Stack>
       <PageTitle title="Periodização" subtitle={`${studentDisplayName(student)} - planejamento visual de ciclos por fase.`} />
       <Panel title="Criar periodização">
+        {periodization && <FormModeNotice editing={isEditing} />}
         <div className="flex flex-wrap gap-2">
-          {[4, 8, 12].map((item) => <button key={item} className={weeks === item ? 'chip-active' : 'chip'} onClick={() => setWeeks(item as 4 | 8 | 12)}>{item} semanas</button>)}
+          {[4, 8, 12].map((item) => <button key={item} className={weeks === item ? 'chip-active' : 'chip'} disabled={Boolean(periodization) && !isEditing} onClick={() => setWeeks(item as 4 | 8 | 12)}>{item} semanas</button>)}
         </div>
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           {previewPhases.map((phase, index) => (
@@ -1526,7 +1693,14 @@ function PeriodizationView({ data, student, commit }: { data: AppData; student: 
             </div>
           ))}
         </div>
-        <button className="btn-primary mt-4 w-full sm:w-auto" onClick={savePeriodization}>Criar periodização</button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {periodization && !isEditing ? (
+            <button className="btn-secondary w-full sm:w-auto" onClick={editPeriodization}>Editar periodização</button>
+          ) : (
+            <button className="btn-primary w-full sm:w-auto" onClick={savePeriodization}>{periodization ? 'Salvar alterações' : 'Criar periodização'}</button>
+          )}
+          {periodization && isEditing && <button className="btn-secondary w-full sm:w-auto" onClick={() => { setWeeks(periodization.weeks); setIsEditing(false); }}>Cancelar</button>}
+        </div>
       </Panel>
       {periodization ? (
         <Panel title="Periodização ativa" action={<Badge label={periodization.status} />}>
@@ -1573,7 +1747,7 @@ function CheckinsView({
   const currentStudent = selectedStudent ?? data.students.find((student) => student.id === selectedStudentId);
   const selectedCheckins = data.checkIns.filter(
     (item) => item.studentId === selectedStudentId
-  );
+  ).sort((a, b) => getCheckInDateValue(b).localeCompare(getCheckInDateValue(a)));
   useEffect(() => {
     setCopyFeedback('');
   }, [selectedStudentId]);
@@ -1606,21 +1780,39 @@ function CheckinsView({
       <PageTitle title="Check-in semanal" subtitle={`${currentStudent ? studentDisplayName(currentStudent) : 'Selecione um aluno'} - respostas para ajuste de treino e conduta.`} />
       {selectedCheckins.length ? (
         <div className="grid gap-3 lg:grid-cols-2">
-          {selectedCheckins.map((checkIn) => (
-            <Panel key={checkIn.id} title={studentName(data, checkIn.studentId)}>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <InfoBox label="Treinos" value={`${checkIn.trainingsDone} na semana`} />
-                <InfoBox label="Peso atual" value={`${checkIn.currentWeight} kg`} />
-                <InfoBox label="Motivação" value={`${checkIn.motivation}/10`} />
-                <InfoBox label="Estresse" value={`${checkIn.stress}/10`} />
-                <InfoBox label="Alimentação" value={checkIn.food} />
-                <InfoBox label="Sono" value={checkIn.sleep} />
-                <InfoBox label="Dificuldade" value={checkIn.difficulty} />
-                <InfoBox label="Vitória" value={checkIn.victory} />
-              </div>
-              <button className="btn-danger mt-4 w-full sm:w-auto" onClick={() => deleteCheckIn(checkIn)}>Excluir check-in</button>
-            </Panel>
-          ))}
+          {selectedCheckins.map((checkIn) => {
+            const checkInStudent = data.students.find((student) => student.id === checkIn.studentId) ?? currentStudent;
+            const photoUrl = getCheckInPhotoUrl(checkIn);
+            return (
+              <Panel key={checkIn.id} title={`Check-in de ${checkInStudent ? studentDisplayName(checkInStudent) : studentName(data, checkIn.studentId)}`}>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <InfoBox label="Data do check-in" value={formatDate(getCheckInDateValue(checkIn))} />
+                  <InfoBox label="Treinos feitos" value={`${checkIn.trainingsDone} na semana`} />
+                  <InfoBox label="Peso atual" value={checkIn.currentWeight ? `${checkIn.currentWeight} kg` : 'Não informado'} />
+                  <InfoBox label="Como me senti" value={checkIn.energy || 'Não informado'} />
+                  <InfoBox label="Sono" value={checkIn.sleep || 'Não informado'} />
+                  <InfoBox label="Alimentação" value={checkIn.food || 'Não informado'} />
+                  <InfoBox label="Energia" value={checkIn.energy || 'Não informado'} />
+                  <InfoBox label="Motivação" value={`${checkIn.motivation || 0}/10`} />
+                  <InfoBox label="Estresse" value={`${checkIn.stress || 0}/10`} />
+                  <InfoBox label="Objetivos" value={checkInStudent?.goal || 'Não informado'} />
+                  <InfoBox label="Metas" value={checkInStudent?.target || 'Não informado'} />
+                  <InfoBox label="Minha dificuldade" value={checkIn.difficulty || 'Não informado'} />
+                  <InfoBox label="Minha vitória" value={checkIn.victory || 'Não informado'} />
+                  <InfoBox label="Observações livres" value={checkIn.notes || 'Não informado'} />
+                </div>
+                <div className="mt-4 rounded-md border border-line bg-ink/40 p-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Foto anexada</p>
+                  {photoUrl ? (
+                    <img src={photoUrl} alt="Foto anexada ao check-in" className="mt-3 max-h-80 w-full rounded-md border border-line object-cover" />
+                  ) : (
+                    <p className="mt-2 text-sm text-slate-300">Sem foto anexada.</p>
+                  )}
+                </div>
+                <button className="btn-danger mt-4 w-full sm:w-auto" onClick={() => deleteCheckIn(checkIn)}>Excluir check-in</button>
+              </Panel>
+            );
+          })}
         </div>
       ) : (
         <Panel title={selectedStudentId ? 'Nenhum check-in respondido ainda para este aluno.' : 'Nenhum check-in respondido ainda'}>
@@ -1636,23 +1828,9 @@ function CheckinsView({
 }
 
 function EvolutionView({ data, student, compact = false }: { data: AppData; student: Student; compact?: boolean }) {
-  const assessments = data.assessments
-    .filter((item) => getAssessmentStudentId(item) === student.id)
-    .sort((a, b) => getAssessmentDateValue(a).localeCompare(getAssessmentDateValue(b)));
-  const firstAssessment = assessments[0];
-  const latestSelectedAssessment = assessments[assessments.length - 1];
-  const initialWeight = firstAssessment ? getAssessmentNumber(firstAssessment, ['weight', 'peso']) : 0;
-  const currentWeight = latestSelectedAssessment ? getAssessmentNumber(latestSelectedAssessment, ['weight', 'peso']) : 0;
-  const initialBodyFat = firstAssessment ? getAssessmentNumber(firstAssessment, ['bodyFat', 'body_fat', 'gordura']) : 0;
-  const currentBodyFat = latestSelectedAssessment ? getAssessmentNumber(latestSelectedAssessment, ['bodyFat', 'body_fat', 'gordura']) : 0;
-  const summaryChart = buildAssessmentSummaryBars(firstAssessment, latestSelectedAssessment);
-  const chart = assessments.map((item) => ({
-    date: formatDate(getAssessmentDateValue(item)).slice(0, 5),
-    peso: getAssessmentNumber(item, ['weight', 'peso']),
-    imc: calculateImc(getAssessmentNumber(item, ['weight', 'peso']), getAssessmentNumber(item, ['height', 'altura'])),
-    gordura: getAssessmentNumber(item, ['bodyFat', 'body_fat', 'gordura']),
-    massa: getAssessmentNumber(item, ['leanMass', 'lean_mass'])
-  }));
+  const evolutionSummary = getStudentEvolutionSummary(student, data.assessments);
+  const assessments = evolutionSummary.assessments;
+  const summaryChart = buildEvolutionChartData(evolutionSummary);
   const checkIns = data.checkIns.filter((item) => item.studentId === student.id);
   const workoutLogs = workoutLogsForStudent(data, student.id);
   const latestWorkoutLog = workoutLogs[0];
@@ -1661,15 +1839,18 @@ function EvolutionView({ data, student, compact = false }: { data: AppData; stud
     <Stack>
       <PageTitle title="Evolução do aluno" subtitle={`${student.fullName} - histórico, medidas, frequência e conquistas.`} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Peso inicial" value={firstAssessment ? `${initialWeight} kg` : 'Sem avaliação'} icon={Activity} accent="blue" />
-        <StatCard label="Peso atual" value={latestSelectedAssessment ? `${currentWeight} kg` : 'Sem avaliação'} icon={LineChart} accent="green" />
+        <StatCard label="Peso inicial" value={`${evolutionSummary.initialWeight} kg`} icon={Activity} accent="blue" />
+        <StatCard label="Peso atual" value={`${evolutionSummary.currentWeight} kg`} icon={LineChart} accent="green" />
         <StatCard label="Check-ins" value={checkIns.length} icon={CalendarCheck} accent="orange" />
         <StatCard label="Treinos feitos" value={workoutLogs.length} icon={Dumbbell} accent="green" />
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-2">
-        <StatCard label="Gordura inicial" value={firstAssessment ? `${initialBodyFat}%` : 'Sem avaliação'} icon={Activity} accent="orange" />
-        <StatCard label="Gordura atual" value={latestSelectedAssessment ? `${currentBodyFat}%` : 'Sem avaliação'} icon={LineChart} accent="green" />
+        <StatCard label="Gordura inicial" value={evolutionSummary.assessmentCount ? `${evolutionSummary.initialBodyFat}%` : 'Sem avaliação'} icon={Activity} accent="orange" />
+        <StatCard label="Gordura atual" value={evolutionSummary.assessmentCount ? `${evolutionSummary.currentBodyFat}%` : 'Sem avaliação'} icon={LineChart} accent="green" />
       </div>
+      <Panel title="Fonte dos dados">
+        <p className="text-sm text-slate-300">{evolutionSummary.source}</p>
+      </Panel>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Último treino realizado" value={latestWorkoutLog ? `${workoutName(data, latestWorkoutLog.workoutId)} - ${latestWorkoutDateTime.date} ${latestWorkoutDateTime.time}` : 'Sem registros'} icon={Dumbbell} accent="green" />
         <StatCard label="Dias sem treinar" value={latestWorkoutLog ? `${daysSince(latestWorkoutLog.completedAt)} dias` : '-'} icon={CalendarCheck} accent="orange" />
@@ -1677,7 +1858,7 @@ function EvolutionView({ data, student, compact = false }: { data: AppData; stud
         <StatCard label="Aderência ao plano" value={`${planAdherence(data, student, workoutLogs)}%`} icon={LineChart} accent="green" />
       </div>
       <Panel title="Evolução física">
-        {assessments.length ? (
+        {summaryChart.length ? (
           <div className={compact ? 'h-64' : 'h-80'}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={summaryChart}>
@@ -1685,11 +1866,12 @@ function EvolutionView({ data, student, compact = false }: { data: AppData; stud
                 <XAxis dataKey="name" stroke="#94a3b8" />
                 <YAxis stroke="#94a3b8" />
                 <Tooltip contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }} />
-                <Bar dataKey="valor" name="Valor" fill="#35e68c" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="peso" name="Peso (kg)" fill="#35e68c" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="gordura" name="Gordura (%)" fill="#38bdf8" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-        ) : <Empty title="Este aluno ainda não possui avaliação física registrada." text="O gráfico será exibido quando houver pelo menos uma avaliação." />}
+        ) : <Empty title="Este aluno ainda não possui dados de peso." text="Informe peso no cadastro ou registre uma avaliação física." />}
       </Panel>
       <WorkoutLogHistory data={data} logs={workoutLogs} />
       <HistoryList assessments={assessments} />
@@ -1711,9 +1893,11 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
   });
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<Payment>(() => createPaymentForm(student));
+  const [isEditing, setIsEditing] = useState(true);
   useEffect(() => {
     setForm(createPaymentForm(student));
     setShowForm(false);
+    setIsEditing(true);
   }, [student?.id]);
   const payments = student ? data.payments.filter((item) => item.studentId === student.id) : data.payments;
   const totalPending = data.payments.filter((item) => item.status !== 'pago').reduce((sum, item) => sum + item.amount, 0);
@@ -1730,8 +1914,9 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
         ...data,
         payments: [...data.payments.filter((item) => item.id !== savedPayment.id), savedPayment]
       }, form.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
-      setForm(createPaymentForm(student));
-      setShowForm(false);
+      setForm(savedPayment);
+      setShowForm(true);
+      setIsEditing(false);
     } catch (error) {
       console.error('Erro ao salvar pagamento:', error);
       window.alert('Não foi possível salvar o pagamento. Verifique os campos e tente novamente.');
@@ -1750,6 +1935,7 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
   const editPayment = (payment: Payment) => {
     setForm({ ...payment });
     setShowForm(true);
+    setIsEditing(false);
     scrollToTop();
   };
   const deletePayment = async (payment: Payment) => {
@@ -1760,6 +1946,7 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
       if (form.id === payment.id) {
         setForm(createPaymentForm(student));
         setShowForm(false);
+        setIsEditing(true);
       }
     } catch (error) {
       console.error('Erro ao excluir pagamento:', error);
@@ -1770,23 +1957,29 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
     <Stack>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <PageTitle title="Gestão financeira" subtitle={`${student ? studentDisplayName(student) : 'Todos os alunos'} - pendências atuais: ${formatCurrency(totalPending)}.`} />
-        <button className="btn-primary w-full sm:w-auto" onClick={() => setShowForm(true)}>Cadastrar pagamento</button>
+        <button className="btn-primary w-full sm:w-auto" onClick={() => { setForm(createPaymentForm(student)); setShowForm(true); setIsEditing(true); }}>Cadastrar pagamento</button>
       </div>
       {(showForm || payments.length === 0) && (
-        <Panel title="Cadastrar pagamento">
+        <Panel title={form.id ? 'Pagamento selecionado' : 'Cadastrar pagamento'}>
           {!payments.length && <p className="mb-4 rounded-md border border-fitblue/30 bg-fitblue/10 p-3 text-sm text-slate-200">Nenhum pagamento cadastrado para este aluno. Registre o primeiro vencimento para acompanhar cobranças.</p>}
+          {form.id && <FormModeNotice editing={isEditing} />}
           <div className="grid gap-3 md:grid-cols-3">
-            <Input label="Plano" value={form.plan} onChange={(value) => setForm({ ...form, plan: value })} />
-            <Input label="Valor" type="number" value={String(form.amount)} onChange={(value) => setForm({ ...form, amount: numberOrZero(value) })} />
-            <Select label="Forma de pagamento" value={form.method} onChange={(value) => setForm({ ...form, method: value as Payment['method'] })} options={[['Pix', 'Pix'], ['cartao', 'Cartão'], ['dinheiro', 'Dinheiro']]} />
-            <Select label="Recorrência" value={form.recurrence} onChange={(value) => setForm({ ...form, recurrence: value as Payment['recurrence'] })} options={[['semanal', 'Semanal'], ['mensal', 'Mensal'], ['trimestral', 'Trimestral'], ['avulso', 'Avulso']]} />
-            <Select label="Status" value={form.status} onChange={(value) => setForm({ ...form, status: value as Payment['status'] })} options={[['pago', 'Pago'], ['pendente', 'Pendente'], ['atrasado', 'Atrasado']]} />
-            <Input label="Vencimento" type="date" value={form.dueDate} onChange={(value) => setForm({ ...form, dueDate: value })} />
-            <Textarea label="Observações" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} />
+            <Input label="Plano" value={form.plan} onChange={(value) => setForm({ ...form, plan: value })} disabled={Boolean(form.id) && !isEditing} />
+            <Input label="Valor" type="number" value={String(form.amount)} onChange={(value) => setForm({ ...form, amount: numberOrZero(value) })} disabled={Boolean(form.id) && !isEditing} />
+            <Select label="Forma de pagamento" value={form.method} onChange={(value) => setForm({ ...form, method: value as Payment['method'] })} disabled={Boolean(form.id) && !isEditing} options={[['Pix', 'Pix'], ['cartao', 'Cartão'], ['dinheiro', 'Dinheiro']]} />
+            <Select label="Recorrência" value={form.recurrence} onChange={(value) => setForm({ ...form, recurrence: value as Payment['recurrence'] })} disabled={Boolean(form.id) && !isEditing} options={[['semanal', 'Semanal'], ['mensal', 'Mensal'], ['trimestral', 'Trimestral'], ['avulso', 'Avulso']]} />
+            <Select label="Status" value={form.status} onChange={(value) => setForm({ ...form, status: value as Payment['status'] })} disabled={Boolean(form.id) && !isEditing} options={[['pago', 'Pago'], ['pendente', 'Pendente'], ['atrasado', 'Atrasado']]} />
+            <Input label="Vencimento" type="date" value={form.dueDate} onChange={(value) => setForm({ ...form, dueDate: value })} disabled={Boolean(form.id) && !isEditing} />
+            <Textarea label="Observações" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} disabled={Boolean(form.id) && !isEditing} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <button className="btn-primary w-full sm:w-auto" onClick={savePayment}>{form.id ? 'Atualizar pagamento' : 'Salvar pagamento'}</button>
-            {form.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => { setForm(createPaymentForm(student)); setShowForm(false); }}>Novo pagamento</button>}
+            {form.id && !isEditing ? (
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => setIsEditing(true)}>Editar pagamento</button>
+            ) : (
+              <button className="btn-primary w-full sm:w-auto" onClick={savePayment}>{form.id ? 'Salvar alterações' : 'Salvar pagamento'}</button>
+            )}
+            {form.id && isEditing && <button className="btn-secondary w-full sm:w-auto" onClick={() => { const original = data.payments.find((item) => item.id === form.id); if (original) { setForm({ ...original }); setIsEditing(false); } }}>Cancelar</button>}
+            {form.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => { setForm(createPaymentForm(student)); setShowForm(true); setIsEditing(true); }}>Novo pagamento</button>}
           </div>
         </Panel>
       )}
@@ -1801,7 +1994,7 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
               {(['pago', 'pendente', 'atrasado'] as const).map((status) => (
-                <button key={status} className={payment.status === status ? 'chip-active' : 'chip'} onClick={() => updatePaymentStatus(payment, status)}>{status}</button>
+                <button key={status} className={payment.status === status ? 'chip-active' : 'chip'} disabled>{status}</button>
               ))}
               <button className="btn-secondary w-full sm:w-auto" onClick={() => editPayment(payment)}>Editar pagamento</button>
               <button className="btn-danger w-full sm:w-auto" onClick={() => deletePayment(payment)}>Excluir pagamento</button>
@@ -2163,7 +2356,8 @@ function StudentWorkout({ data, student, commit }: { data: AppData; student: Stu
 function StudentCheckin({ data, student, commit }: { data: AppData; student: Student; commit: (data: AppData, message?: string) => void }) {
   const [form, setForm] = useState({ trainingsDone: 0, food: '', sleep: '', energy: '', motivation: 8, stress: 5, currentWeight: student.currentWeight, difficulty: '', victory: '', notes: '', photo: '' });
   const save = async () => {
-    const checkIn: CheckIn = { id: makeId('c'), studentId: student.id, date: new Date().toISOString().slice(0, 10), ...form };
+    const today = new Date().toISOString().slice(0, 10);
+    const checkIn: CheckIn = { id: makeId('c'), studentId: student.id, checkinDate: today, date: today, ...form, photoUrl: form.photo };
     try {
       const remoteId = await saveCheckInRemote(checkIn);
       commit({ ...data, checkIns: [...data.checkIns, { ...checkIn, id: remoteId ?? checkIn.id }], students: data.students.map((item) => (item.id === student.id ? { ...item, currentWeight: Number(form.currentWeight) } : item)) }, 'Check-in enviado ao personal.');
@@ -2213,19 +2407,19 @@ function StudentProfile({ data, student, commit }: { data: AppData; student: Stu
   );
 }
 
-function ExerciseEditor({ exercise, onChange }: { exercise: Exercise; onChange: (exercise: Exercise) => void }) {
+function ExerciseEditor({ exercise, onChange, disabled = false }: { exercise: Exercise; onChange: (exercise: Exercise) => void; disabled?: boolean }) {
   return (
     <div className="rounded-md border border-line bg-ink/40 p-3">
       <div className="grid gap-3 md:grid-cols-4">
-        <Input label="Nome do exercício" value={exercise.name} onChange={(value) => onChange({ ...exercise, name: value })} />
-        <Input label="Grupo muscular" value={exercise.muscleGroup} onChange={(value) => onChange({ ...exercise, muscleGroup: value })} />
-        <Input label="Séries" value={exercise.sets} onChange={(value) => onChange({ ...exercise, sets: value })} />
-        <Input label="Repetições" value={exercise.reps} onChange={(value) => onChange({ ...exercise, reps: value })} />
-        <Input label="Carga" value={exercise.load} onChange={(value) => onChange({ ...exercise, load: value })} />
-        <Input label="Descanso" value={exercise.rest} onChange={(value) => onChange({ ...exercise, rest: value })} />
-        <Input label="Vídeo explicativo" value={exercise.videoUrl} onChange={(value) => onChange({ ...exercise, videoUrl: value })} />
-        <Select label="Status" value={exercise.status} onChange={(value) => onChange({ ...exercise, status: value as Exercise['status'] })} options={[['ativo', 'Ativo'], ['concluido', 'Concluído']]} />
-        <Textarea label="Observações técnicas" value={exercise.notes} onChange={(value) => onChange({ ...exercise, notes: value })} />
+        <Input label="Nome do exercício" value={exercise.name} onChange={(value) => onChange({ ...exercise, name: value })} disabled={disabled} />
+        <Input label="Grupo muscular" value={exercise.muscleGroup} onChange={(value) => onChange({ ...exercise, muscleGroup: value })} disabled={disabled} />
+        <Input label="Séries" value={exercise.sets} onChange={(value) => onChange({ ...exercise, sets: value })} disabled={disabled} />
+        <Input label="Repetições" value={exercise.reps} onChange={(value) => onChange({ ...exercise, reps: value })} disabled={disabled} />
+        <Input label="Carga" value={exercise.load} onChange={(value) => onChange({ ...exercise, load: value })} disabled={disabled} />
+        <Input label="Descanso" value={exercise.rest} onChange={(value) => onChange({ ...exercise, rest: value })} disabled={disabled} />
+        <Input label="Vídeo explicativo" value={exercise.videoUrl} onChange={(value) => onChange({ ...exercise, videoUrl: value })} disabled={disabled} />
+        <Select label="Status" value={exercise.status} onChange={(value) => onChange({ ...exercise, status: value as Exercise['status'] })} disabled={disabled} options={[['ativo', 'Ativo'], ['concluido', 'Concluído']]} />
+        <Textarea label="Observações técnicas" value={exercise.notes} onChange={(value) => onChange({ ...exercise, notes: value })} disabled={disabled} />
       </div>
     </div>
   );
@@ -2247,7 +2441,7 @@ function StudentSelector({ students, value, onChange }: { students: Student[]; v
   );
 }
 
-function HistoryList({ assessments, onEdit, onDelete }: { assessments: PhysicalAssessment[]; onEdit?: (assessment: PhysicalAssessment) => void; onDelete?: (assessment: PhysicalAssessment) => void }) {
+function HistoryList({ assessments, onView, onEdit, onDelete }: { assessments: PhysicalAssessment[]; onView?: (assessment: PhysicalAssessment) => void; onEdit?: (assessment: PhysicalAssessment) => void; onDelete?: (assessment: PhysicalAssessment) => void }) {
   return (
     <Panel title="Histórico de avaliações">
       {assessments.length ? (
@@ -2255,8 +2449,9 @@ function HistoryList({ assessments, onEdit, onDelete }: { assessments: PhysicalA
           {assessments.slice().sort((a, b) => b.date.localeCompare(a.date)).map((item) => (
             <div key={item.id} className="rounded-md border border-line bg-ink/40 p-3">
               <Row title={`${formatDate(item.date)} - ${item.weight} kg`} meta={`IMC ${calculateImc(item.weight, item.height)} - gordura ${item.bodyFat}% - cintura ${item.waist} cm`} badge="Avaliação" />
-              {(onEdit || onDelete) && (
+              {(onView || onEdit || onDelete) && (
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {onView && <button className="btn-secondary w-full sm:w-auto" onClick={() => onView(item)}>Visualizar avaliação</button>}
                   {onEdit && <button className="btn-secondary w-full sm:w-auto" onClick={() => onEdit(item)}>Editar avaliação</button>}
                   {onDelete && <button className="btn-danger w-full sm:w-auto" onClick={() => onDelete(item)}>Excluir avaliação</button>}
                 </div>
@@ -2329,36 +2524,36 @@ function MobileTab({ active, icon: Icon, label, onClick }: { active: boolean; ic
   );
 }
 
-function Input({ label, value, onChange, type = 'text', required = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean }) {
+function Input({ label, value, onChange, type = 'text', required = false, disabled = false, readOnly = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean; disabled?: boolean; readOnly?: boolean }) {
   return (
     <label className="block text-sm">
       <span className="mb-1 block text-slate-300">{label}</span>
-      <input className="field" type={type} value={value ?? ''} required={required} onChange={(event) => onChange(event.target.value)} />
+      <input className={`field ${disabled || readOnly ? 'cursor-default bg-ink/70 text-slate-300 opacity-90' : ''}`} type={type} value={value ?? ''} required={required} disabled={disabled} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }
 
-function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: [string, string][] }) {
+function Select({ label, value, onChange, options, disabled = false }: { label: string; value: string; onChange: (value: string) => void; options: [string, string][]; disabled?: boolean }) {
   return (
     <label className="block text-sm">
       <span className="mb-1 block text-slate-300">{label}</span>
-      <select className="field" value={value ?? ''} onChange={(event) => onChange(event.target.value)}>
+      <select className={`field ${disabled ? 'cursor-default bg-ink/70 text-slate-300 opacity-90' : ''}`} value={value ?? ''} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
         {options.map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}
       </select>
     </label>
   );
 }
 
-function Textarea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function Textarea({ label, value, onChange, disabled = false, readOnly = false }: { label: string; value: string; onChange: (value: string) => void; disabled?: boolean; readOnly?: boolean }) {
   return (
     <label className="block text-sm md:col-span-2">
       <span className="mb-1 block text-slate-300">{label}</span>
-      <textarea className="field min-h-24 resize-y" value={value ?? ''} onChange={(event) => onChange(event.target.value)} />
+      <textarea className={`field min-h-24 resize-y ${disabled || readOnly ? 'cursor-default bg-ink/70 text-slate-300 opacity-90' : ''}`} value={value ?? ''} disabled={disabled} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }
 
-function ImageUpload({ label, value, onChange, multiple = false }: { label: string; value: string[]; onChange: (value: string[]) => void; multiple?: boolean }) {
+function ImageUpload({ label, value, onChange, multiple = false, disabled = false }: { label: string; value: string[]; onChange: (value: string[]) => void; multiple?: boolean; disabled?: boolean }) {
   const handleFiles = (files: FileList | null) => {
     if (!files?.length) return;
     Promise.all(
@@ -2377,7 +2572,7 @@ function ImageUpload({ label, value, onChange, multiple = false }: { label: stri
     <label className="block text-sm md:col-span-2">
       <span className="mb-1 block text-slate-300">{label}</span>
       <div className="rounded-md border border-dashed border-line bg-ink/60 p-3">
-        <input className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-fitblue file:px-3 file:py-2 file:text-sm file:font-bold file:text-ink" type="file" accept="image/*" multiple={multiple} onChange={(event) => handleFiles(event.target.files)} />
+        <input className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-fitblue file:px-3 file:py-2 file:text-sm file:font-bold file:text-ink disabled:cursor-default disabled:opacity-50" type="file" accept="image/*" multiple={multiple} disabled={disabled} onChange={(event) => handleFiles(event.target.files)} />
         <p className="mt-2 text-xs text-slate-500">Pré-visualização local agora. Pronto para trocar por Supabase Storage depois.</p>
         {value.length > 0 && (
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -2402,6 +2597,14 @@ function InfoBox({ label, value }: { label: string; value: React.ReactNode }) {
       <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{label}</p>
       <p className="mt-1 text-sm text-slate-200">{value || '-'}</p>
     </div>
+  );
+}
+
+function FormModeNotice({ editing }: { editing: boolean }) {
+  return (
+    <p className={`mb-4 rounded-md border p-3 text-sm ${editing ? 'border-fitgreen/30 bg-fitgreen/10 text-fitgreen' : 'border-fitblue/30 bg-fitblue/10 text-slate-200'}`}>
+      {editing ? 'Modo edição ativo.' : 'Modo visualização. Clique em Editar para alterar os dados.'}
+    </p>
   );
 }
 

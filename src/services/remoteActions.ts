@@ -199,7 +199,7 @@ export async function saveCheckInRemote(checkIn: CheckIn): Promise<string | unde
     difficulty: checkIn.difficulty,
     victory: checkIn.victory,
     notes: checkIn.notes,
-    photo_url: checkIn.photo ?? null
+    photo_url: checkIn.photoUrl ?? checkIn.photo ?? null
   }).select('id').single();
   if (error) throw error;
   return data.id as string;

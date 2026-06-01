@@ -232,22 +232,28 @@ export async function loadAppData(currentUser?: User | null): Promise<AppData> {
       createdAt: item.created_at ?? empty,
       updatedAt: item.updated_at ?? undefined
     })),
-    checkIns: ((checkinsResult.data ?? []) as Record<string, any>[]).map<CheckIn>((item) => ({
+    checkIns: ((checkinsResult.data ?? []) as Record<string, any>[]).map<CheckIn>((item) => {
+      const checkinDate = item.checkin_date ?? item.checkinDate ?? item.date ?? empty;
+      const photoUrl = item.photo_url ?? item.photoUrl ?? item.photo ?? undefined;
+      return {
       id: item.id,
-      studentId: item.student_id,
-      date: item.checkin_date,
-      trainingsDone: Number(item.trainings_done ?? 0),
+      studentId: item.student_id ?? item.studentId ?? item.student?.id ?? empty,
+      checkinDate,
+      date: checkinDate,
+      trainingsDone: Number(item.trainings_done ?? item.trainingsDone ?? 0),
       food: item.food ?? empty,
       sleep: item.sleep ?? empty,
       energy: item.energy ?? empty,
       motivation: Number(item.motivation ?? 0),
       stress: Number(item.stress ?? 0),
-      currentWeight: Number(item.current_weight ?? 0),
+      currentWeight: Number(item.current_weight ?? item.currentWeight ?? 0),
       difficulty: item.difficulty ?? empty,
       victory: item.victory ?? empty,
       notes: item.notes ?? empty,
-      photo: item.photo_url ?? undefined
-    })),
+      photoUrl,
+      photo: photoUrl
+    };
+    }),
     payments: ((financialResult.data ?? []) as Record<string, any>[]).map<Payment>((item) => ({
       id: item.id,
       studentId: item.student_id,
