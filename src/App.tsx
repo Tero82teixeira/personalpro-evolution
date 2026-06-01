@@ -636,7 +636,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
         {tab === 'anamnesis' && selectedStudent && <AnamnesisView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'workouts' && selectedStudent && <WorkoutCrud data={data} student={selectedStudent} user={user} commit={commit} />}
         {tab === 'periodization' && selectedStudent && <PeriodizationView data={data} student={selectedStudent} commit={commit} />}
-        {tab === 'journey' && selectedStudent && <JourneyView data={data} student={selectedStudent} />}
+        {tab === 'journey' && selectedStudent && <JourneyView data={data} student={selectedStudent} canEditWater={false} />}
         {tab === 'checkins' && <CheckinsView data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} commit={commit} />}
         {tab === 'evolution' && selectedStudent && <EvolutionView data={data} student={selectedStudent} />}
         {tab === 'finance' && <FinanceView data={data} student={selectedStudent} commit={commit} />}
@@ -663,7 +663,7 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
     <div className="mx-auto max-w-4xl px-4 pb-24 pt-5">
       {tab === 'home' && <StudentDashboard data={data} student={student} />}
       {tab === 'workout' && <StudentWorkout data={data} student={student} commit={commit} />}
-      {tab === 'journey' && <JourneyView data={data} student={student} />}
+      {tab === 'journey' && <JourneyView data={data} student={student} canEditWater />}
       {tab === 'evolution' && <EvolutionView data={data} student={student} compact />}
       {tab === 'checkin' && <StudentCheckin data={data} student={student} commit={commit} />}
       {tab === 'profile' && <StudentProfile data={data} student={student} commit={commit} />}
@@ -2084,6 +2084,80 @@ type TimelineEvent = {
   details: string[];
 };
 
+type WaterRecord = {
+  studentId: string;
+  date: string;
+  waterGoal: number;
+  waterConsumed: number;
+};
+
+const waterStorageKey = 'personalpro-water-records';
+const waterGoalLiters = 3;
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function normalizeWaterValue(value: number) {
+  return Math.max(0, Math.round(value * 100) / 100);
+}
+
+function loadWaterRecords(): WaterRecord[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(waterStorageKey);
+    return raw ? JSON.parse(raw) as WaterRecord[] : [];
+  } catch (error) {
+    console.error('Erro ao carregar controle de água:', error);
+    return [];
+  }
+}
+
+function saveWaterRecords(records: WaterRecord[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(waterStorageKey, JSON.stringify(records));
+}
+
+function waterCelebrationKey(studentId: string, date: string) {
+  return `waterCelebrated_${studentId}_${date}`;
+}
+
+function hasCelebratedWaterGoal(studentId: string, date: string) {
+  return typeof window !== 'undefined' && window.localStorage.getItem(waterCelebrationKey(studentId, date)) === 'true';
+}
+
+function markWaterGoalCelebrated(studentId: string, date: string) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(waterCelebrationKey(studentId, date), 'true');
+}
+
+function lastWaterActionKey(studentId: string, date: string) {
+  return `personalpro-last-water-action:${studentId}:${date}`;
+}
+
+function loadLastWaterAction(studentId: string, date = todayKey()) {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem(lastWaterActionKey(studentId, date));
+}
+
+function saveLastWaterAction(studentId: string, date: string, action: string) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(lastWaterActionKey(studentId, date), action);
+}
+
+function getWaterRecord(records: WaterRecord[], studentId: string, date = todayKey()) {
+  return records.find((record) => record.studentId === studentId && record.date === date) ?? {
+    studentId,
+    date,
+    waterGoal: waterGoalLiters,
+    waterConsumed: 0
+  };
+}
+
+function formatLiters(value: number) {
+  return `${normalizeWaterValue(value).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} litros`;
+}
+
 function timelineTimestamp(value?: string) {
   if (!value) return Number.NEGATIVE_INFINITY;
   const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value;
@@ -2105,7 +2179,7 @@ function studentIdFromRecord<T>(record: T) {
   return String(recordField(record, ['studentId', 'student_id']) ?? '');
 }
 
-function buildStudentTimeline(studentId: string, data: AppData): TimelineEvent[] {
+function buildStudentTimeline(studentId: string, data: AppData, waterRecords: WaterRecord[] = []): TimelineEvent[] {
   const assessmentEvents = data.assessments
     .filter((assessment) => getAssessmentStudentId(assessment) === studentId)
     .map<TimelineEvent>((assessment) => ({
@@ -2166,13 +2240,23 @@ function buildStudentTimeline(studentId: string, data: AppData): TimelineEvent[]
       details: [`Plano: ${payment.plan}`, `Valor: ${formatCurrency(payment.amount)}`, `Status: ${payment.status}`]
     }));
 
-  return [...assessmentEvents, ...workoutEvents, ...checkInEvents, ...periodizationEvents, ...paymentEvents]
+  const waterEvents = waterRecords
+    .filter((record) => record.studentId === studentId && record.waterConsumed >= record.waterGoal)
+    .map<TimelineEvent>((record) => ({
+      id: `water-${record.studentId}-${record.date}`,
+      icon: '💧',
+      title: '💧 Meta de hidratação concluída',
+      date: record.date,
+      details: [`Meta: ${formatLiters(record.waterGoal)}`, `Consumido: ${formatLiters(record.waterConsumed)}`]
+    }));
+
+  return [...assessmentEvents, ...workoutEvents, ...checkInEvents, ...periodizationEvents, ...paymentEvents, ...waterEvents]
     .sort((a, b) => timelineTimestamp(b.date) - timelineTimestamp(a.date));
 }
 
-function StudentTimeline({ data, studentId }: { data: AppData; studentId: string }) {
+function StudentTimeline({ data, studentId, waterRecords = [] }: { data: AppData; studentId: string; waterRecords?: WaterRecord[] }) {
   const [showAll, setShowAll] = useState(false);
-  const events = buildStudentTimeline(studentId, data);
+  const events = buildStudentTimeline(studentId, data, waterRecords);
   const visibleEvents = showAll ? events : events.slice(0, 10);
 
   return (
@@ -2214,11 +2298,59 @@ function StudentTimeline({ data, studentId }: { data: AppData; studentId: string
   );
 }
 
-function JourneyView({ data, student }: { data: AppData; student: Student }) {
+function JourneyView({ data, student, canEditWater = false }: { data: AppData; student: Student; canEditWater?: boolean }) {
+  const [waterRecords, setWaterRecords] = useState<WaterRecord[]>(() => loadWaterRecords());
+  const [lastWaterAction, setLastWaterAction] = useState<string | null>(() => loadLastWaterAction(student.id));
+  const [showWaterCelebration, setShowWaterCelebration] = useState(false);
   const assessments = data.assessments.filter((item) => getAssessmentStudentId(item) === student.id);
   const workoutLogs = workoutLogsForStudent(data, student.id);
   const checkIns = data.checkIns.filter((item) => item.studentId === student.id);
   const activePeriodization = data.periodizations.find((item) => item.studentId === student.id && item.status === 'ativo');
+  const todayWater = getWaterRecord(waterRecords, student.id);
+  const waterProgress = Math.min(100, Math.round((todayWater.waterConsumed / todayWater.waterGoal) * 100));
+  const bottleFill = Math.min(100, Math.max(0, waterProgress));
+  const waterConsumedText = formatLiters(todayWater.waterConsumed);
+  const waterGoalText = formatLiters(todayWater.waterGoal);
+  const waterExtra = Math.max(0, todayWater.waterConsumed - todayWater.waterGoal);
+  const hasWaterExtra = waterExtra > 0;
+  const waterCompleted = todayWater.waterConsumed >= todayWater.waterGoal;
+  const waterRegistered = todayWater.waterConsumed > 0;
+  useEffect(() => {
+    setLastWaterAction(loadLastWaterAction(student.id));
+    setShowWaterCelebration(false);
+  }, [student.id]);
+  const triggerWaterCelebration = () => {
+    setShowWaterCelebration(false);
+    window.setTimeout(() => setShowWaterCelebration(true), 10);
+    window.setTimeout(() => setShowWaterCelebration(false), 3010);
+  };
+  const waterButtonClass = (action: string) => {
+    const active = lastWaterAction === action;
+    return `btn-secondary w-full ${active ? '!border-blue-400 !bg-blue-500/20 !text-white shadow-[0_0_18px_rgba(56,189,248,0.35)] ring-2 ring-fitblue/30' : ''}`;
+  };
+  const handleWaterChange = (amount: number, actionKey: string) => {
+    if (!canEditWater) return;
+    const current = getWaterRecord(waterRecords, student.id);
+    const wasCompleted = current.waterConsumed >= current.waterGoal;
+    const nextRecord = {
+      ...current,
+      waterGoal: current.waterGoal || waterGoalLiters,
+      waterConsumed: normalizeWaterValue(current.waterConsumed + amount)
+    };
+    const isCompleted = nextRecord.waterConsumed >= nextRecord.waterGoal;
+    const nextRecords = [
+      ...waterRecords.filter((record) => !(record.studentId === student.id && record.date === current.date)),
+      nextRecord
+    ];
+    setLastWaterAction(actionKey);
+    saveLastWaterAction(student.id, current.date, actionKey);
+    if (!wasCompleted && isCompleted && !hasCelebratedWaterGoal(student.id, current.date)) {
+      markWaterGoalCelebrated(student.id, current.date);
+      triggerWaterCelebration();
+    }
+    setWaterRecords(nextRecords);
+    saveWaterRecords(nextRecords);
+  };
   const completedWorkoutsCount = workoutLogs.length;
   const journeyPhases = [
     { title: '🌱 Início', description: 'Primeiros passos da jornada.' },
@@ -2244,12 +2376,14 @@ function JourneyView({ data, student }: { data: AppData; student: Student }) {
   const journeyDay = Math.min(90, Math.max(1, rawJourneyDay));
   const journeyPercent = Math.min(100, Math.round((journeyDay / 90) * 100));
   const monthWorkouts = monthWorkoutCount(workoutLogs);
-  const journeyScore =
+  const journeyScore = Math.min(100,
     (assessments.length > 0 ? 30 : 0) +
     (completedWorkoutsCount > 0 ? 25 : 0) +
     (checkIns.length > 0 ? 20 : 0) +
     (activePeriodization ? 15 : 0) +
-    (completedWorkoutsCount >= 5 ? 10 : 0);
+    (completedWorkoutsCount >= 5 ? 10 : 0) +
+    (waterCompleted ? 10 : 0)
+  );
   const scoreStatus = journeyScore <= 30 ? '🌱 Começando' : journeyScore <= 60 ? '📈 Em evolução' : journeyScore <= 80 ? '🔥 Consistente' : '🏆 Excelente';
   const trainedToday = workoutLogs.some((log) => isSameDate(getWorkoutLogCompletedAt(log)));
   const checkedInToday = checkIns.some((checkIn) => isSameDate(checkIn.date));
@@ -2259,12 +2393,15 @@ function JourneyView({ data, student }: { data: AppData; student: Student }) {
     { label: '📏 Primeira avaliação registrada', active: assessments.length >= 1 },
     { label: '📅 Periodização criada', active: Boolean(activePeriodization) },
     { label: '🔥 5 treinos concluídos', active: completedWorkoutsCount >= 5 },
-    { label: '🏆 10 treinos concluídos', active: completedWorkoutsCount >= 10 }
+    { label: '🏆 10 treinos concluídos', active: completedWorkoutsCount >= 10 },
+    { label: '💧 Meta de água concluída', active: waterCompleted },
+    { label: '💧 7 dias hidratado', active: false },
+    { label: '💧 30 dias hidratado', active: false }
   ];
   const dailyGoals = [
     { label: '🏋️ Treino concluído hoje', status: trainedToday ? 'Concluído' : 'Pendente', active: trainedToday, neutral: false },
     { label: '📋 Check-in respondido hoje', status: checkedInToday ? 'Concluído' : 'Pendente', active: checkedInToday, neutral: false },
-    { label: '💧 Água registrada', status: 'Em breve', active: false, neutral: true },
+    { label: '💧 Água registrada', status: waterCompleted ? 'Concluído' : waterRegistered ? 'Registrado' : 'Pendente', active: waterRegistered, neutral: false },
     { label: '😴 Sono registrado', status: 'Em breve', active: false, neutral: true }
   ];
   const dayPhases = [
@@ -2348,10 +2485,99 @@ function JourneyView({ data, student }: { data: AppData; student: Student }) {
               <InfoBox label="Check-in respondido" value={checkIns.length > 0 ? '+20 pontos' : '0 pontos'} />
               <InfoBox label="Periodização ativa" value={activePeriodization ? '+15 pontos' : '0 pontos'} />
               <InfoBox label="5 ou mais treinos" value={completedWorkoutsCount >= 5 ? '+10 pontos' : '0 pontos'} />
+              <InfoBox label="Meta de água hoje" value={waterCompleted ? '+10 pontos' : '0 pontos'} />
             </div>
           </div>
         </Panel>
       </div>
+
+      <Panel title="💧 Controle de água">
+        <div className="grid gap-4 lg:grid-cols-[1fr_180px_220px] lg:items-center">
+          <div className="relative overflow-visible rounded-lg">
+            {showWaterCelebration && (
+              <div className="water-celebration">
+                {['🎉', '💧', '✨', '🎉', '💧', '✨', '🎉', '💧', '✨', '🎉', '💧', '✨'].map((item, index) => (
+                  <span
+                    key={`${item}-${index}`}
+                    className="water-confetti"
+                    style={{ left: `${8 + index * 7}%`, animationDelay: `${(index % 4) * 0.12}s` }}
+                  >
+                    {item}
+                  </span>
+                ))}
+                <div className="water-celebration-message">🎉 Parabéns! Meta de hidratação concluída.</div>
+              </div>
+            )}
+            <div className="grid gap-3 sm:grid-cols-3">
+              <InfoBox label="Meta diária" value={formatLiters(todayWater.waterGoal)} />
+              <InfoBox label="Consumido hoje" value={formatLiters(todayWater.waterConsumed)} />
+              <InfoBox label="Progresso" value={`${waterProgress}%`} />
+            </div>
+            <div className="mt-4 h-3 overflow-hidden rounded-full bg-ink">
+              <div className="h-full rounded-full bg-fitblue" style={{ width: `${waterProgress}%` }} />
+            </div>
+            <p className="mt-3 text-sm text-slate-300">
+              {todayWater.waterConsumed === 0
+                ? 'Comece sua hidratação de hoje.'
+                : hasWaterExtra
+                  ? '🏆 Meta batida! Você passou da sua meta de hidratação.'
+                  : waterCompleted
+                  ? '🎉 Parabéns! Meta de hidratação concluída.'
+                  : 'Continue, falta pouco para bater sua meta.'}
+            </p>
+            {!canEditWater && <p className="mt-2 text-xs font-semibold text-fitblue">Somente o aluno pode registrar o consumo de água.</p>}
+          </div>
+          <div className={`space-y-3 ${hasWaterExtra ? 'rounded-2xl border border-emerald-400/30 bg-emerald-500/5 p-2 shadow-[0_0_28px_rgba(16,185,129,0.16)]' : ''}`}>
+            {hasWaterExtra && (
+              <div className="mx-auto w-fit rounded-full border border-emerald-400/40 bg-emerald-500/15 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-emerald-200">
+                🏆 Meta batida
+              </div>
+            )}
+            <div className={`relative mx-auto flex w-full max-w-[170px] flex-col items-center rounded-2xl border p-4 ${
+              hasWaterExtra
+                ? 'border-emerald-300/80 bg-emerald-500/15 shadow-[0_0_36px_rgba(16,185,129,0.28)]'
+                : waterCompleted
+                  ? 'border-emerald-400/70 bg-emerald-500/10 shadow-[0_0_28px_rgba(16,185,129,0.22)]'
+                  : 'border-fitblue/50 bg-fitblue/10 shadow-[0_0_22px_rgba(56,189,248,0.16)]'
+            }`}>
+              <div className="mb-1 h-3 w-12 rounded-t-lg border border-fitblue/50 bg-slate-700/80 shadow-inner" />
+              <div className="relative h-44 w-20 overflow-hidden rounded-[1.6rem] border border-fitblue/60 bg-slate-950/80 shadow-[inset_10px_0_22px_rgba(255,255,255,0.08),inset_-10px_0_22px_rgba(0,0,0,0.35),0_18px_40px_rgba(14,165,233,0.18)]">
+                <div
+                  className="absolute bottom-0 left-0 right-0 rounded-b-[1.4rem] bg-gradient-to-t from-blue-700 via-sky-400 to-cyan-200 transition-all duration-500 ease-out"
+                  style={{ height: `${bottleFill}%` }}
+                >
+                  <div className="absolute -top-2 left-[-25%] h-5 w-[150%] rounded-[50%] bg-cyan-100/55 blur-[1px]" />
+                  <div className="absolute left-2 top-3 h-[80%] w-3 rounded-full bg-white/25 blur-[1px]" />
+                  <div className="absolute right-2 top-6 h-[60%] w-2 rounded-full bg-blue-900/20 blur-[1px]" />
+                </div>
+                <div className="absolute left-3 top-4 h-24 w-3 rounded-full bg-white/20 blur-[1px]" />
+                <div className="pointer-events-none absolute inset-0 rounded-[1.6rem] bg-gradient-to-r from-white/20 via-transparent to-black/25" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="rounded-full bg-slate-950/35 px-2 py-1 text-lg font-black text-white drop-shadow">
+                    {waterProgress}%
+                  </span>
+                </div>
+              </div>
+              <p className="mt-3 text-center text-xs font-semibold text-slate-200">
+                Consumido: {waterConsumedText} / {waterGoalText}
+              </p>
+              {hasWaterExtra && (
+                <p className="mt-1 text-center text-xs font-black text-emerald-200">
+                  Extra: +{formatLiters(waterExtra)}
+                </p>
+              )}
+            </div>
+          </div>
+          {canEditWater && (
+            <div className="grid gap-2">
+              <button className={waterButtonClass('250')} onClick={() => handleWaterChange(0.25, '250')}>💧 +250 ml</button>
+              <button className={waterButtonClass('500')} onClick={() => handleWaterChange(0.5, '500')}>💧 +500 ml</button>
+              <button className={waterButtonClass('1000')} onClick={() => handleWaterChange(1, '1000')}>💧 +1 litro</button>
+              <button className={waterButtonClass('-250')} onClick={() => handleWaterChange(-0.25, '-250')}>−250 ml</button>
+            </div>
+          )}
+        </div>
+      </Panel>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Metas de hoje">
@@ -2380,7 +2606,7 @@ function JourneyView({ data, student }: { data: AppData; student: Student }) {
         </Panel>
       </div>
 
-      <StudentTimeline data={data} studentId={student.id} />
+      <StudentTimeline data={data} studentId={student.id} waterRecords={waterRecords} />
     </Stack>
   );
 }
