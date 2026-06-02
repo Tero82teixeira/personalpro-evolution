@@ -2000,7 +2000,16 @@ function CheckinsView({
 function EvolutionView({ data, student, compact = false }: { data: AppData; student: Student; compact?: boolean }) {
   const evolutionSummary = getStudentEvolutionSummary(student, data.assessments);
   const assessments = evolutionSummary.assessments;
-  const summaryChart = buildEvolutionChartData(evolutionSummary);
+  const evolutionComparisonChart = [
+    { name: 'Peso inicial', valor: evolutionSummary.initialWeight, unidade: 'kg' },
+    { name: 'Peso atual', valor: evolutionSummary.currentWeight, unidade: 'kg' },
+    ...(evolutionSummary.assessmentCount
+      ? [
+          { name: 'Gordura inicial', valor: evolutionSummary.initialBodyFat, unidade: '%' },
+          { name: 'Gordura atual', valor: evolutionSummary.currentBodyFat, unidade: '%' }
+        ]
+      : [])
+  ];
   const checkIns = data.checkIns.filter((item) => item.studentId === student.id);
   const workoutLogs = workoutLogsForStudent(data, student.id);
   const latestWorkoutLog = workoutLogs[0];
@@ -2008,42 +2017,47 @@ function EvolutionView({ data, student, compact = false }: { data: AppData; stud
   return (
     <Stack>
       <PageTitle title="Evolução do aluno" subtitle={`${student.fullName} - histórico, medidas, frequência e conquistas.`} />
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Peso inicial" value={`${evolutionSummary.initialWeight} kg`} icon={Activity} accent="blue" />
-        <StatCard label="Peso atual" value={`${evolutionSummary.currentWeight} kg`} icon={LineChart} accent="green" />
+      {!compact && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Peso inicial" value={`${evolutionSummary.initialWeight} kg`} icon={Activity} accent="blue" />
+          <StatCard label="Peso atual" value={`${evolutionSummary.currentWeight} kg`} icon={LineChart} accent="green" />
+          <StatCard label="Gordura inicial" value={evolutionSummary.assessmentCount ? `${evolutionSummary.initialBodyFat}%` : 'Sem registro'} icon={Activity} accent="orange" />
+          <StatCard label="Gordura atual" value={evolutionSummary.assessmentCount ? `${evolutionSummary.currentBodyFat}%` : 'Sem registro'} icon={LineChart} accent="green" />
+        </div>
+      )}
+      <div className="grid gap-3 sm:grid-cols-2">
         <StatCard label="Check-ins" value={checkIns.length} icon={CalendarCheck} accent="orange" />
         <StatCard label="Treinos feitos" value={workoutLogs.length} icon={Dumbbell} accent="green" />
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-2">
-        <StatCard label="Gordura inicial" value={evolutionSummary.assessmentCount ? `${evolutionSummary.initialBodyFat}%` : 'Sem avaliação'} icon={Activity} accent="orange" />
-        <StatCard label="Gordura atual" value={evolutionSummary.assessmentCount ? `${evolutionSummary.currentBodyFat}%` : 'Sem avaliação'} icon={LineChart} accent="green" />
-      </div>
-      <Panel title="Fonte dos dados">
+      {!compact && <Panel title="Fonte dos dados">
         <p className="text-sm text-slate-300">{evolutionSummary.source}</p>
-      </Panel>
+      </Panel>}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Último treino realizado" value={latestWorkoutLog ? `${workoutName(data, latestWorkoutLog.workoutId)} - ${latestWorkoutDateTime.date} ${latestWorkoutDateTime.time}` : 'Sem registros'} icon={Dumbbell} accent="green" />
         <StatCard label="Dias sem treinar" value={latestWorkoutLog ? `${daysSince(latestWorkoutLog.completedAt)} dias` : '-'} icon={CalendarCheck} accent="orange" />
         <StatCard label="Treinos no mês" value={monthWorkoutCount(workoutLogs)} icon={Activity} accent="blue" />
         <StatCard label="Aderência ao plano" value={`${planAdherence(data, student, workoutLogs)}%`} icon={LineChart} accent="green" />
       </div>
-      <Panel title="Evolução física">
-        {summaryChart.length ? (
-          <div className={compact ? 'h-64' : 'h-80'}>
+      <Panel title="Gráfico de evolução física">
+        {evolutionComparisonChart.length ? (
+          <div className={compact ? 'h-56' : 'h-72'}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={summaryChart}>
+              <BarChart data={evolutionComparisonChart} layout="vertical" margin={{ top: 8, right: 16, left: 12, bottom: 8 }}>
                 <CartesianGrid stroke="#1d2b3d" />
-                <XAxis dataKey="name" stroke="#94a3b8" />
-                <YAxis stroke="#94a3b8" />
-                <Tooltip contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }} />
-                <Bar dataKey="peso" name="Peso (kg)" fill="#35e68c" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="gordura" name="Gordura (%)" fill="#38bdf8" radius={[6, 6, 0, 0]} />
+                <XAxis type="number" stroke="#94a3b8" tick={{ fontSize: 12 }} />
+                <YAxis dataKey="name" type="category" stroke="#cbd5e1" width={112} tick={{ fontSize: 13, fontWeight: 700 }} />
+                <Tooltip
+                  cursor={false}
+                  formatter={(value, _name, item) => [`${value} ${(item.payload as { unidade?: string }).unidade ?? ''}`, item.payload.name]}
+                  contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d', boxShadow: 'none' }}
+                />
+                <Bar dataKey="valor" name="Valor" fill="#38bdf8" radius={[0, 6, 6, 0]} activeBar={false} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         ) : <Empty title="Este aluno ainda não possui dados de peso." text="Informe peso no cadastro ou registre uma avaliação física." />}
       </Panel>
-      <WorkoutLogHistory data={data} logs={workoutLogs} />
+      <WorkoutLogHistory data={data} logs={workoutLogs} compactLimit={compact ? 3 : undefined} collapsible={compact} />
       <HistoryList assessments={assessments} />
     </Stack>
   );
@@ -2424,10 +2438,11 @@ function buildStudentTimeline(studentId: string, data: AppData, waterRecords: Wa
     .sort((a, b) => timelineTimestamp(b.date) - timelineTimestamp(a.date));
 }
 
-function StudentTimeline({ data, studentId, waterRecords = [] }: { data: AppData; studentId: string; waterRecords?: WaterRecord[] }) {
+function StudentTimeline({ data, studentId, waterRecords = [], compactInitial = false }: { data: AppData; studentId: string; waterRecords?: WaterRecord[]; compactInitial?: boolean }) {
   const [showAll, setShowAll] = useState(false);
   const events = buildStudentTimeline(studentId, data, waterRecords);
-  const visibleEvents = showAll ? events : events.slice(0, 10);
+  const initialLimit = compactInitial ? 3 : 10;
+  const visibleEvents = showAll ? events : events.slice(0, initialLimit);
 
   return (
     <Panel title="Linha do tempo do aluno">
@@ -2435,7 +2450,7 @@ function StudentTimeline({ data, studentId, waterRecords = [] }: { data: AppData
         <>
           <div className="space-y-0">
             {visibleEvents.map((event, index) => (
-              <div key={event.id} className={`grid grid-cols-[30px_1fr] gap-2 md:grid-cols-[34px_1fr] md:gap-3 ${!showAll && index >= 3 ? 'hidden md:grid' : ''}`}>
+              <div key={event.id} className={`grid grid-cols-[30px_1fr] gap-2 md:grid-cols-[34px_1fr] md:gap-3 ${!compactInitial && !showAll && index >= 3 ? 'hidden md:grid' : ''}`}>
                 <div className="relative flex justify-center">
                   <span className="z-10 grid h-7 w-7 place-items-center rounded-full border border-fitblue/30 bg-fitblue/10 text-[11px] font-black text-fitblue md:h-8 md:w-8 md:text-xs">{event.icon}</span>
                   {index < visibleEvents.length - 1 && <span className="absolute top-7 h-full w-px bg-line md:top-8" />}
@@ -2457,7 +2472,7 @@ function StudentTimeline({ data, studentId, waterRecords = [] }: { data: AppData
               {showAll ? 'Mostrar menos' : 'Ver linha do tempo completa'}
             </button>
           )}
-          {events.length > 10 && (
+          {events.length > initialLimit && (
             <button className="btn-secondary mt-2 hidden md:inline-flex" onClick={() => setShowAll(!showAll)}>
               {showAll ? 'Mostrar menos' : 'Ver linha do tempo completa'}
             </button>
@@ -2477,7 +2492,11 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
   const [waterRecords, setWaterRecords] = useState<WaterRecord[]>(() => loadWaterRecords());
   const [lastWaterAction, setLastWaterAction] = useState<string | null>(() => loadLastWaterAction(student.id));
   const [showWaterCelebration, setShowWaterCelebration] = useState(false);
+  const [showStudentAvatar, setShowStudentAvatar] = useState(!canEditWater);
+  const [showJourneyAssessment, setShowJourneyAssessment] = useState(!canEditWater);
+  const [showAchievements, setShowAchievements] = useState(!canEditWater);
   const assessments = data.assessments.filter((item) => getAssessmentStudentId(item) === student.id);
+  const evolutionSummary = getStudentEvolutionSummary(student, data.assessments);
   const workoutLogs = workoutLogsForStudent(data, student.id);
   const checkIns = data.checkIns.filter((item) => item.studentId === student.id);
   const activePeriodization = data.periodizations.find((item) => item.studentId === student.id && item.status === 'ativo');
@@ -2493,7 +2512,10 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
   useEffect(() => {
     setLastWaterAction(loadLastWaterAction(student.id));
     setShowWaterCelebration(false);
-  }, [student.id]);
+    setShowStudentAvatar(!canEditWater);
+    setShowJourneyAssessment(!canEditWater);
+    setShowAchievements(!canEditWater);
+  }, [student.id, canEditWater]);
   const triggerWaterCelebration = () => {
     setShowWaterCelebration(false);
     window.setTimeout(() => setShowWaterCelebration(true), 10);
@@ -2573,6 +2595,8 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
     { label: '💧 7 dias hidratado', active: false },
     { label: '💧 30 dias hidratado', active: false }
   ];
+  const activeAchievements = achievements.filter((achievement) => achievement.active);
+  const nextAchievement = achievements.find((achievement) => !achievement.active);
   const dailyGoals = [
     { label: '🏋️ Treino concluído hoje', status: trainedToday ? 'Concluído' : 'Pendente', active: trainedToday, neutral: false },
     { label: '📋 Check-in respondido hoje', status: checkedInToday ? 'Concluído' : 'Pendente', active: checkedInToday, neutral: false },
@@ -2599,30 +2623,73 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
       </Panel>
 
       <Panel title="Avatar de evolução">
-        <div className="grid gap-3 sm:grid-cols-5">
-          {journeyPhases.map((phase, index) => {
-            const active = index <= phaseIndex;
-            const current = index === phaseIndex;
-            return (
-              <div key={phase.title} className={`rounded-lg border p-3 ${active ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-line bg-ink/40'}`}>
-                <div className={`mb-3 grid h-10 w-10 place-items-center rounded-full border text-sm font-black ${current ? 'border-fitblue bg-fitblue text-ink' : active ? 'border-fitgreen text-fitgreen' : 'border-line text-slate-500'}`}>
-                  {index + 1}
-                </div>
-                <p className="font-semibold">{phase.title}</p>
-                <p className="mt-2 text-xs leading-relaxed text-slate-400">{phase.description}</p>
-              </div>
-            );
-          })}
-        </div>
-        <div className="mt-4 rounded-lg border border-fitblue/20 bg-fitblue/10 p-4">
-          <p className="font-semibold text-fitblue">Fase atual: {currentPhase.title}</p>
-          <p className="mt-1 text-sm text-slate-300">
-            {phaseIndex === 4
-              ? 'Parabéns! Você chegou à fase Transformação. Agora é hora de manter a consistência.'
-              : 'Continue acumulando treinos, check-ins e avaliações para evoluir até a fase Transformação.'}
-          </p>
-        </div>
+        {canEditWater && (
+          <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
+            <InfoBox label="Fase atual" value={currentPhase.title} />
+            <button className="btn-secondary w-full sm:w-auto" onClick={() => setShowStudentAvatar(!showStudentAvatar)}>
+              {showStudentAvatar ? 'Ocultar avatar' : 'Ver avatar de evolução'}
+            </button>
+          </div>
+        )}
+        {showStudentAvatar && (
+          <>
+            <div className="grid gap-3 sm:grid-cols-5">
+              {journeyPhases.map((phase, index) => {
+                const active = index <= phaseIndex;
+                const current = index === phaseIndex;
+                return (
+                  <div key={phase.title} className={`rounded-lg border p-3 ${active ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-line bg-ink/40'}`}>
+                    <div className={`mb-3 grid h-10 w-10 place-items-center rounded-full border text-sm font-black ${current ? 'border-fitblue bg-fitblue text-ink' : active ? 'border-fitgreen text-fitgreen' : 'border-line text-slate-500'}`}>
+                      {index + 1}
+                    </div>
+                    <p className="font-semibold">{phase.title}</p>
+                    <p className="mt-2 text-xs leading-relaxed text-slate-400">{phase.description}</p>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-4 rounded-lg border border-fitblue/20 bg-fitblue/10 p-4">
+              <p className="font-semibold text-fitblue">Fase atual: {currentPhase.title}</p>
+              <p className="mt-1 text-sm text-slate-300">
+                {phaseIndex === 4
+                  ? 'Parabéns! Você chegou à fase Transformação. Agora é hora de manter a consistência.'
+                  : 'Continue acumulando treinos, check-ins e avaliações para evoluir até a fase Transformação.'}
+              </p>
+            </div>
+          </>
+        )}
       </Panel>
+
+      {canEditWater && (
+        <Panel title="Avaliação física">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <InfoBox label="Peso atual" value={evolutionSummary.assessmentCount || evolutionSummary.currentWeight ? `${evolutionSummary.currentWeight} kg` : 'Sem registro'} />
+            <InfoBox label="Gordura atual" value={evolutionSummary.assessmentCount ? `${evolutionSummary.currentBodyFat}%` : 'Sem registro'} />
+            <InfoBox label="Última avaliação" value={evolutionSummary.lastAssessment ? formatDate(getAssessmentDateValue(evolutionSummary.lastAssessment)) : 'Sem registro'} />
+          </div>
+          <button className="btn-secondary mt-3 w-full sm:w-auto" onClick={() => setShowJourneyAssessment(!showJourneyAssessment)}>
+            {showJourneyAssessment ? 'Ocultar' : 'Ver detalhes'}
+          </button>
+          {showJourneyAssessment && (
+            <div className="mt-4">
+              {evolutionSummary.assessmentCount ? (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <InfoBox label="Peso inicial" value={`${evolutionSummary.initialWeight} kg`} />
+                  <InfoBox label="Peso atual" value={`${evolutionSummary.currentWeight} kg`} />
+                  <InfoBox label="Gordura inicial" value={`${evolutionSummary.initialBodyFat}%`} />
+                  <InfoBox label="Gordura atual" value={`${evolutionSummary.currentBodyFat}%`} />
+                  <InfoBox label="Fonte dos dados" value={evolutionSummary.source} />
+                  <InfoBox label="Total de avaliações" value={evolutionSummary.assessmentCount} />
+                  <InfoBox label="Primeira avaliação" value={evolutionSummary.firstAssessment ? formatDate(getAssessmentDateValue(evolutionSummary.firstAssessment)) : 'Sem registro'} />
+                  <InfoBox label="Última avaliação" value={evolutionSummary.lastAssessment ? formatDate(getAssessmentDateValue(evolutionSummary.lastAssessment)) : 'Sem registro'} />
+                </div>
+              ) : (
+                <Empty title="Nenhuma avaliação física registrada ainda." text="Quando o personal registrar uma avaliação, os dados aparecerão aqui." />
+              )}
+            </div>
+          )}
+        </Panel>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Jornada de 90 dias">
@@ -2681,6 +2748,13 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
                   </span>
                 ))}
                 <div className="water-celebration-message">🎉 Parabéns! Meta de hidratação concluída.</div>
+              </div>
+            )}
+            {canEditWater && (
+              <div className="mb-4 rounded-xl border border-fitblue/40 bg-fitblue/10 p-4 shadow-[0_0_24px_rgba(56,189,248,0.14)]">
+                <p className="text-sm font-black uppercase tracking-[0.14em] text-fitblue">🎯 Meta diária de hidratação</p>
+                <p className="mt-2 text-3xl font-black text-white">{formatLiters(todayWater.waterGoal)}</p>
+                <p className="mt-1 text-base text-slate-300">Sua meta de água para hoje</p>
               </div>
             )}
             <div className="grid gap-3 sm:grid-cols-3">
@@ -2770,18 +2844,40 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
         </Panel>
 
         <Panel title="Conquistas">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-2">
-            {achievements.slice().sort((a, b) => Number(b.active) - Number(a.active)).map((achievement) => (
-              <div key={achievement.label} className={`rounded-md border px-3 py-3 ${achievement.active ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-line bg-ink/40'}`}>
-                <p className={`text-xs font-semibold leading-snug sm:text-sm ${achievement.active ? 'text-fitgreen' : 'text-slate-400'}`}>{achievement.label}</p>
-                <p className="mt-1 text-xs text-slate-500">{achievement.active ? 'Conquista ativa' : 'Ainda não liberada'}</p>
+          {canEditWater ? (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <InfoBox label="Conquistas ativas" value={`${activeAchievements.length}/${achievements.length}`} />
+                <InfoBox label="Próxima conquista" value={nextAchievement?.label ?? 'Todas liberadas'} />
               </div>
-            ))}
-          </div>
+              <button className="btn-secondary mt-3 w-full sm:w-auto" onClick={() => setShowAchievements(!showAchievements)}>
+                {showAchievements ? 'Ocultar' : 'Ver detalhes'}
+              </button>
+              {showAchievements && (
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-2">
+                  {achievements.slice().sort((a, b) => Number(b.active) - Number(a.active)).map((achievement) => (
+                    <div key={achievement.label} className={`rounded-md border px-3 py-3 ${achievement.active ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-line bg-ink/40'}`}>
+                      <p className={`text-sm font-semibold leading-snug ${achievement.active ? 'text-fitgreen' : 'text-slate-400'}`}>{achievement.label}</p>
+                      <p className="mt-1 text-sm text-slate-500">{achievement.active ? 'Conquista ativa' : 'Ainda não liberada'}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-2">
+              {achievements.slice().sort((a, b) => Number(b.active) - Number(a.active)).map((achievement) => (
+                <div key={achievement.label} className={`rounded-md border px-3 py-3 ${achievement.active ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-line bg-ink/40'}`}>
+                  <p className={`text-xs font-semibold leading-snug sm:text-sm ${achievement.active ? 'text-fitgreen' : 'text-slate-400'}`}>{achievement.label}</p>
+                  <p className="mt-1 text-xs text-slate-500">{achievement.active ? 'Conquista ativa' : 'Ainda não liberada'}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </Panel>
       </div>
 
-      <StudentTimeline data={data} studentId={student.id} waterRecords={waterRecords} />
+      <StudentTimeline data={data} studentId={student.id} waterRecords={waterRecords} compactInitial={canEditWater} />
     </Stack>
   );
 }
@@ -2791,42 +2887,61 @@ function WorkoutLogHistory({
   logs,
   showStudent = true,
   emptyText = 'Quando o aluno concluir um treino, o registro aparecerá aqui.',
-  compactLimit
+  compactLimit,
+  collapsible = false
 }: {
   data: AppData;
   logs: WorkoutLog[];
   showStudent?: boolean;
   emptyText?: string;
   compactLimit?: number;
+  collapsible?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const [showHistory, setShowHistory] = useState(!collapsible);
   const visibleLogs = compactLimit && !showAll ? logs.slice(0, compactLimit) : logs;
+  const latestLog = logs[0];
+  const latestDateTime = formatDateTimeParts(latestLog?.completedAt);
   return (
     <Panel title="Histórico de treinos realizados">
-      {logs.length ? (
-        <div className="space-y-3">
-          {visibleLogs.map((log) => {
-            const completed = formatDateTimeParts(log.completedAt);
-            return (
-              <div key={log.id} className="rounded-md border border-line bg-ink/40 p-3">
-                <div className={`grid gap-3 sm:grid-cols-2 ${showStudent ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
-                  {showStudent && <InfoBox label="Aluno" value={studentName(data, log.studentId)} />}
-                  <InfoBox label="Treino" value={workoutName(data, log.workoutId)} />
-                  <InfoBox label="Data" value={completed.date} />
-                  <InfoBox label="Hora" value={completed.time} />
-                  <InfoBox label="Status" value={<Badge label={log.status} />} />
-                </div>
-              </div>
-            );
-          })}
-          {compactLimit && logs.length > compactLimit && (
-            <button className="btn-secondary w-full sm:w-auto" onClick={() => setShowAll(!showAll)}>
-              {showAll ? 'Mostrar menos' : 'Ver mais'}
-            </button>
-          )}
+      {collapsible && (
+        <div className="mb-4 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <InfoBox label="Total de treinos concluídos" value={logs.length} />
+            <InfoBox label="Último treino realizado" value={latestLog ? workoutName(data, latestLog.workoutId) : 'Sem registros'} />
+            <InfoBox label="Data do último treino" value={latestLog ? latestDateTime.date : 'Sem registros'} />
+          </div>
+          <button className="btn-secondary w-full sm:w-auto" onClick={() => setShowHistory(!showHistory)}>
+            {showHistory ? 'Ocultar histórico' : 'Ver histórico de treinos'}
+          </button>
         </div>
-      ) : (
-        <Empty title="Sem treinos concluídos" text={emptyText} />
+      )}
+      {showHistory && (
+        logs.length ? (
+          <div className="space-y-3">
+            {visibleLogs.map((log) => {
+              const completed = formatDateTimeParts(log.completedAt);
+              return (
+                <div key={log.id} className="rounded-md border border-line bg-ink/40 p-3">
+                  <div className={`grid gap-3 sm:grid-cols-2 ${showStudent ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
+                    {showStudent && <InfoBox label="Aluno" value={studentName(data, log.studentId)} />}
+                    <InfoBox label="Treino" value={workoutName(data, log.workoutId)} />
+                    <InfoBox label="Data" value={completed.date} />
+                    <InfoBox label="Hora" value={completed.time} />
+                    <InfoBox label="Status" value={<Badge label={log.status} />} />
+                  </div>
+                </div>
+              );
+            })}
+            {compactLimit && logs.length > compactLimit && (
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => setShowAll(!showAll)}>
+                {showAll ? 'Mostrar menos' : 'Ver mais'}
+              </button>
+            )}
+          </div>
+        ) : (
+          <Empty title="Sem treinos concluídos" text={emptyText} />
+        )
       )}
     </Panel>
   );
@@ -2920,6 +3035,11 @@ function StudentWorkout({ data, student, commit }: { data: AppData; student: Stu
 
 function StudentCheckin({ data, student, commit }: { data: AppData; student: Student; commit: (data: AppData, message?: string) => void }) {
   const [form, setForm] = useState({ trainingsDone: 0, food: '', sleep: '', energy: '', motivation: 8, stress: 5, currentWeight: student.currentWeight, difficulty: '', victory: '', notes: '', photo: '' });
+  const [selectedCheckInId, setSelectedCheckInId] = useState('');
+  const studentCheckIns = data.checkIns
+    .filter((item) => item.studentId === student.id)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const selectedCheckIn = studentCheckIns.find((item) => item.id === selectedCheckInId);
   const save = async () => {
     const today = new Date().toISOString().slice(0, 10);
     const checkIn: CheckIn = { id: makeId('c'), studentId: student.id, checkinDate: today, date: today, ...form, photoUrl: form.photo };
@@ -2969,24 +3089,100 @@ function StudentCheckin({ data, student, commit }: { data: AppData; student: Stu
         </div>
         <button className="btn-primary mt-5 w-full sm:w-auto" onClick={save}>Enviar check-in</button>
       </Panel>
+      <Panel title="Meus check-ins respondidos">
+        {studentCheckIns.length ? (
+          <div className="space-y-4">
+            <Select
+              label="Selecione uma data"
+              value={selectedCheckInId}
+              onChange={setSelectedCheckInId}
+              options={[
+                ['', 'Selecione uma data'],
+                ...studentCheckIns.map((checkIn) => [checkIn.id, formatDate(checkIn.date)] as [string, string])
+              ]}
+            />
+            {!selectedCheckIn ? (
+              <p className="rounded-md border border-line bg-ink/40 p-3 text-sm text-slate-300">
+                Selecione uma data para visualizar o check-in respondido.
+              </p>
+            ) : (
+              <div className="rounded-lg border border-line bg-ink/40 p-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <InfoBox label="Data" value={formatDate(selectedCheckIn.date)} />
+                  <InfoBox label="Peso atual" value={selectedCheckIn.currentWeight ? `${selectedCheckIn.currentWeight} kg` : 'Sem registro'} />
+                  <InfoBox label="Como me senti" value={selectedCheckIn.energy || 'Sem registro'} />
+                  <InfoBox label="Sono" value={selectedCheckIn.sleep || 'Sem registro'} />
+                  <InfoBox label="Alimentação" value={selectedCheckIn.food || 'Sem registro'} />
+                  <InfoBox label="Energia" value={selectedCheckIn.energy || 'Sem registro'} />
+                  <InfoBox label="Motivação" value={`${selectedCheckIn.motivation}/10`} />
+                  <InfoBox label="Estresse" value={`${selectedCheckIn.stress}/10`} />
+                  <InfoBox label="Minha dificuldade" value={selectedCheckIn.difficulty || 'Sem registro'} />
+                  <InfoBox label="Minha vitória" value={selectedCheckIn.victory || 'Sem registro'} />
+                  <InfoBox label="Observações livres" value={selectedCheckIn.notes || 'Sem registro'} />
+                  <div className="sm:col-span-2">
+                    {selectedCheckIn.photoUrl || selectedCheckIn.photo ? (
+                      <img className="max-h-72 w-full rounded-lg border border-line object-cover" src={selectedCheckIn.photoUrl || selectedCheckIn.photo} alt="Foto anexada no check-in" />
+                    ) : (
+                      <p className="rounded-md border border-line bg-ink/50 p-3 text-sm text-slate-300">Sem foto anexada.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <Empty title="Você ainda não respondeu nenhum check-in." text="Quando enviar um check-in, ele aparecerá aqui para consulta." />
+        )}
+      </Panel>
     </Stack>
   );
 }
 
 function StudentProfile({ data, student, commit }: { data: AppData; student: Student; commit: (data: AppData, message?: string) => void }) {
   const [form, setForm] = useState(student);
+  const [isEditing, setIsEditing] = useState(false);
+  useEffect(() => {
+    setForm(student);
+    setIsEditing(false);
+  }, [student.id]);
+  const cancel = () => {
+    setForm(student);
+    setIsEditing(false);
+  };
+  const saveProfile = async () => {
+    try {
+      await saveStudentRemote(form);
+      commit({ ...data, students: data.students.map((item) => (item.id === student.id ? form : item)) }, 'Perfil atualizado com sucesso.');
+      setIsEditing(false);
+    } catch (error) {
+      console.error('Erro ao atualizar perfil do aluno:', error);
+      window.alert('Não foi possível atualizar o perfil. Verifique os dados e tente novamente.');
+    }
+  };
   return (
     <Stack>
-      <PageTitle title="Meu perfil" subtitle="Atualize seus dados básicos e objetivo." />
+      <PageTitle title="Meu perfil" subtitle="Consulte seus dados e edite apenas quando precisar atualizar algo." />
       <Panel title="Dados pessoais">
+        <p className={`mb-4 rounded-md border px-3 py-2 text-sm font-semibold ${isEditing ? 'border-fitblue/30 bg-fitblue/10 text-fitblue' : 'border-line bg-ink/40 text-slate-300'}`}>
+          {isEditing ? 'Modo edição ativo.' : 'Modo visualização. Clique em Editar perfil para alterar seus dados.'}
+        </p>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Input label="Nome" value={form.fullName} onChange={(value) => setForm({ ...form, fullName: value })} />
-          <Input label="Telefone" value={form.phone} onChange={(value) => setForm({ ...form, phone: value })} />
-          <ImageUpload label="Foto de perfil" value={form.avatar ? [form.avatar] : []} onChange={(photos) => setForm({ ...form, avatar: photos[0] })} />
-          <Input label="Objetivo" value={form.goal} onChange={(value) => setForm({ ...form, goal: value })} />
-          <Textarea label="Meta" value={form.target} onChange={(value) => setForm({ ...form, target: value })} />
+          <Input label="Nome" value={form.fullName} onChange={(value) => setForm({ ...form, fullName: value })} disabled={!isEditing} />
+          <Input label="Telefone" value={form.phone} onChange={(value) => setForm({ ...form, phone: value })} disabled={!isEditing} />
+          <ImageUpload label="Foto de perfil" value={form.avatar ? [form.avatar] : []} onChange={(photos) => setForm({ ...form, avatar: photos[0] })} disabled={!isEditing} />
+          <Input label="Objetivo" value={form.goal} onChange={(value) => setForm({ ...form, goal: value })} disabled={!isEditing} />
+          <Textarea label="Meta" value={form.target} onChange={(value) => setForm({ ...form, target: value })} disabled={!isEditing} />
         </div>
-        <button className="btn-primary mt-4 w-full sm:w-auto" onClick={() => commit({ ...data, students: data.students.map((item) => (item.id === student.id ? form : item)) }, 'Perfil atualizado.')}>Salvar perfil</button>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          {isEditing ? (
+            <>
+              <button className="btn-primary w-full sm:w-auto" onClick={saveProfile}>Salvar alterações</button>
+              <button className="btn-secondary w-full sm:w-auto" onClick={cancel}>Cancelar</button>
+            </>
+          ) : (
+            <button className="btn-secondary w-full sm:w-auto" onClick={() => setIsEditing(true)}>Editar perfil</button>
+          )}
+        </div>
       </Panel>
     </Stack>
   );

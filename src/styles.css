@@ -502,3 +502,15 @@
     font-weight: 700;
   }
 }
+
+.recharts-wrapper *:focus,
+.recharts-wrapper *:focus-visible {
+  outline: none !important;
+}
+
+.recharts-tooltip-cursor,
+.recharts-active-bar {
+  fill: transparent !important;
+  stroke: transparent !important;
+  filter: none !important;
+}
