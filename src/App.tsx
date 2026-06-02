@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import {
   Bar,
   BarChart,
@@ -39,6 +39,38 @@ import type { Anamnesis, AppData, CheckIn, Exercise, MarketingIdea, MessageTempl
 
 type IconProps = { size?: number; className?: string };
 type IconComponent = (props: IconProps) => React.JSX.Element;
+
+class TrainingErrorBoundary extends Component<{ componentName: string; children: ReactNode }, { error?: Error; stack?: string }> {
+  state: { error?: Error; stack?: string } = {};
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Erro ao carregar Treinos:', error, info);
+    this.setState({ error, stack: info.componentStack ?? '' });
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <section className="rounded-lg border border-fitorange/40 bg-fitorange/10 p-4 text-slate-100">
+          <h2 className="text-lg font-black text-fitorange">Erro ao carregar Treinos</h2>
+          <p className="mt-2 text-sm">Componente: {this.props.componentName}</p>
+          <p className="mt-2 text-sm">Mensagem: {this.state.error.message}</p>
+          {this.state.stack && (
+            <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-ink/70 p-3 text-xs text-slate-300">
+              {this.state.stack.split('\n').slice(0, 8).join('\n')}
+            </pre>
+          )}
+        </section>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 const makeIcon = (symbol: string): IconComponent => ({ size = 18, className = '' }) => (
   <span
@@ -214,6 +246,53 @@ function expectedMonthlyWorkouts(data: AppData, studentId: string) {
     .filter((workout) => workout.studentId === studentId)
     .reduce((sum, workout) => sum + Number(workout.weeklyFrequency.match(/\d+/)?.[0] ?? 0), 0);
   return weeklyTotal ? weeklyTotal * 4 : 12;
+}
+
+function normalizeExercise(rawExercise: unknown, index: number): Exercise {
+  const source = (rawExercise && typeof rawExercise === 'object' ? rawExercise : {}) as Partial<Exercise>;
+  return {
+    id: String(source.id ?? `exercise-${index}`),
+    name: String(source.name ?? ''),
+    muscleGroup: String(source.muscleGroup ?? ''),
+    sets: String(source.sets ?? ''),
+    reps: String(source.reps ?? ''),
+    load: String(source.load ?? ''),
+    rest: String(source.rest ?? ''),
+    notes: String(source.notes ?? ''),
+    videoUrl: String(source.videoUrl ?? ''),
+    status: source.status === 'concluido' ? 'concluido' : 'ativo'
+  };
+}
+
+function safeWorkoutExercises(workout?: Workout | null) {
+  const rawExercises = (workout as unknown as { exercises?: unknown } | undefined)?.exercises;
+  let exercises: unknown[] = [];
+  if (Array.isArray(rawExercises)) {
+    exercises = rawExercises;
+  } else if (typeof rawExercises === 'string' && rawExercises.trim()) {
+    try {
+      const parsed = JSON.parse(rawExercises);
+      exercises = Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      console.error('Erro ao normalizar exercícios do treino:', error);
+      exercises = [];
+    }
+  }
+  return exercises.map((exercise, index) => normalizeExercise(exercise, index));
+}
+
+function normalizeWorkout(workout: Workout): Workout {
+  return {
+    ...workout,
+    id: String(workout.id ?? ''),
+    studentId: String(workout.studentId ?? ''),
+    name: String(workout.name ?? ''),
+    objective: String(workout.objective ?? ''),
+    estimatedDuration: String(workout.estimatedDuration ?? ''),
+    weeklyFrequency: String(workout.weeklyFrequency ?? ''),
+    notes: String(workout.notes ?? ''),
+    exercises: safeWorkoutExercises(workout)
+  };
 }
 
 function planAdherence(data: AppData, student: Student, logs: WorkoutLog[]) {
@@ -614,7 +693,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
   };
 
   return (
-    <div className="mx-auto grid max-w-7xl gap-4 px-3 py-4 md:grid-cols-[240px_1fr] md:gap-5 md:px-6 md:py-5">
+    <div className="mx-auto grid max-w-7xl gap-3 px-3 pb-28 pt-4 md:grid-cols-[240px_1fr] md:gap-5 md:px-6 md:py-5">
       <div className="md:hidden">
         <button className="btn-secondary w-full justify-between" onClick={() => setMenuOpen(!menuOpen)}>
           <span className="inline-flex items-center gap-2">
@@ -634,7 +713,11 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
         {tab === 'students' && <StudentCrud data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} onSelect={handleSelectStudent} commit={commit} />}
         {tab === 'assessments' && selectedStudent && <Assessments data={data} student={selectedStudent} commit={commit} />}
         {tab === 'anamnesis' && selectedStudent && <AnamnesisView data={data} student={selectedStudent} commit={commit} />}
-        {tab === 'workouts' && selectedStudent && <WorkoutCrud data={data} student={selectedStudent} user={user} commit={commit} />}
+        {tab === 'workouts' && selectedStudent && (
+          <TrainingErrorBoundary key={`admin-workouts-${selectedStudent.id}`} componentName="WorkoutCrud">
+            <WorkoutCrud data={data} student={selectedStudent} user={user} commit={commit} />
+          </TrainingErrorBoundary>
+        )}
         {tab === 'periodization' && selectedStudent && <PeriodizationView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'journey' && selectedStudent && <JourneyView data={data} student={selectedStudent} canEditWater={false} />}
         {tab === 'checkins' && <CheckinsView data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} commit={commit} />}
@@ -660,9 +743,13 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
   if (!student) return <Empty title="Perfil não encontrado" text="Entre em contato com o personal." />;
 
   return (
-    <div className="mx-auto max-w-4xl px-4 pb-24 pt-5">
+    <div className="mx-auto max-w-4xl px-3 pb-32 pt-4 sm:px-4 md:pb-24 md:pt-5">
       {tab === 'home' && <StudentDashboard data={data} student={student} />}
-      {tab === 'workout' && <StudentWorkout data={data} student={student} commit={commit} />}
+      {tab === 'workout' && (
+        <TrainingErrorBoundary key={`student-workout-${student.id}`} componentName="StudentWorkout">
+          <StudentWorkout data={data} student={student} commit={commit} />
+        </TrainingErrorBoundary>
+      )}
       {tab === 'journey' && <JourneyView data={data} student={student} canEditWater />}
       {tab === 'evolution' && <EvolutionView data={data} student={student} compact />}
       {tab === 'checkin' && <StudentCheckin data={data} student={student} commit={commit} />}
@@ -687,6 +774,10 @@ function AdminDashboard({
   selectedStudentId: string;
   selectedStudent?: Student;
 }) {
+  const [showStudentSummary, setShowStudentSummary] = useState(false);
+  const [showWorkoutHistory, setShowWorkoutHistory] = useState(false);
+  const [workoutHistoryFilter, setWorkoutHistoryFilter] = useState<'today' | 'week' | 'month' | 'date' | ''>('');
+  const [workoutHistoryDate, setWorkoutHistoryDate] = useState('');
   const studentsWithCheckIn = new Set(data.checkIns.map((item) => item.studentId));
   const studentsWithAssessment = new Set(data.assessments.map((item) => getAssessmentStudentId(item)).filter(Boolean));
   const pendingCheckinStudents = data.students.filter((student) => !studentsWithCheckIn.has(student.id));
@@ -717,7 +808,30 @@ function AdminDashboard({
   const evolutionSummary = currentStudent ? getStudentEvolutionSummary(currentStudent, data.assessments) : undefined;
   const selectedAssessments = evolutionSummary?.assessments ?? [];
   const selectedFinancialStatus = selectedPayments.find((payment) => payment.status === 'atrasado') ?? selectedPayments.find((payment) => payment.status === 'pendente') ?? selectedPayments[0];
-  const selectedChart = evolutionSummary ? buildEvolutionChartData(evolutionSummary) : [];
+  const hasDashboardWeightData = Boolean(evolutionSummary && (evolutionSummary.initialWeight || evolutionSummary.currentWeight || evolutionSummary.assessmentCount));
+  const dashboardEvolutionMetrics = evolutionSummary ? [
+    { label: 'Peso inicial', value: `${evolutionSummary.initialWeight} kg`, tone: 'green' },
+    { label: 'Peso atual', value: `${evolutionSummary.currentWeight} kg`, tone: 'green' },
+    { label: 'Gordura inicial', value: evolutionSummary.assessmentCount ? `${evolutionSummary.initialBodyFat}%` : 'Sem registro', tone: 'blue' },
+    { label: 'Gordura atual', value: evolutionSummary.assessmentCount ? `${evolutionSummary.currentBodyFat}%` : 'Sem registro', tone: 'blue' }
+  ] : [];
+  const selectedChart = evolutionSummary ? [
+    { name: 'Peso inicial', valor: evolutionSummary.initialWeight, unidade: 'kg' },
+    { name: 'Peso atual', valor: evolutionSummary.currentWeight, unidade: 'kg' },
+    { name: 'Gordura inicial', valor: evolutionSummary.assessmentCount ? evolutionSummary.initialBodyFat : 0, unidade: '%' },
+    { name: 'Gordura atual', valor: evolutionSummary.assessmentCount ? evolutionSummary.currentBodyFat : 0, unidade: '%' }
+  ] : [];
+  const selectedFilteredWorkoutLogs = selectedWorkoutLogs.filter((log) => {
+    const completedAt = getWorkoutLogCompletedAt(log);
+    const completedDate = dateKey(completedAt);
+    if (!workoutHistoryFilter) return false;
+    if (workoutHistoryFilter === 'date') return Boolean(workoutHistoryDate) && completedDate === workoutHistoryDate;
+    const date = new Date(completedAt);
+    if (Number.isNaN(date.getTime())) return false;
+    if (workoutHistoryFilter === 'today') return isSameDate(completedAt);
+    if (workoutHistoryFilter === 'week') return Date.now() - date.getTime() <= 7 * 86400000;
+    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+  });
   const hasSelectedStudentData = Boolean(
     currentStudent &&
       (selectedWorkoutLogs.length || selectedCheckIns.length || selectedPayments.length || selectedPeriodization || selectedAssessments.length || evolutionSummary?.initialWeight || evolutionSummary?.currentWeight)
@@ -729,8 +843,15 @@ function AdminDashboard({
       return { student, latestLog, inactiveDays };
     })
     .filter((item) => item.inactiveDays > 7);
+  useEffect(() => {
+    setShowStudentSummary(false);
+    setShowWorkoutHistory(false);
+    setWorkoutHistoryFilter('');
+    setWorkoutHistoryDate('');
+  }, [selectedStudentId]);
 
   return (
+    <div className="admin-dashboard">
     <Stack>
       <PageTitle title="Dashboard" subtitle="Visão rápida da operação, evolução e pendências dos alunos." />
 
@@ -748,47 +869,88 @@ function AdminDashboard({
       <Panel title="Resumo do aluno selecionado">
         {currentStudent ? (
           <Stack>
-            {!hasSelectedStudentData && <Empty title="Este aluno ainda não possui dados suficientes." text="Registre treinos, check-ins, pagamentos ou periodização para enriquecer o resumo." />}
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <InfoBox label="Nome do aluno" value={studentDisplayName(currentStudent)} />
-              <InfoBox label="Peso inicial" value={`${evolutionSummary?.initialWeight ?? 0} kg`} />
               <InfoBox label="Peso atual" value={`${evolutionSummary?.currentWeight ?? 0} kg`} />
-              <InfoBox label="Gordura inicial" value={evolutionSummary?.assessmentCount ? `${evolutionSummary.initialBodyFat}%` : 'Sem avaliação'} />
-              <InfoBox label="Gordura atual" value={evolutionSummary?.assessmentCount ? `${evolutionSummary.currentBodyFat}%` : 'Sem avaliação'} />
-              <InfoBox label="Fonte dos dados" value={evolutionSummary?.source ?? '-'} />
-              <InfoBox label="Último treino realizado" value={selectedLatestWorkoutLog ? workoutName(data, selectedLatestWorkoutLog.workoutId) : 'Sem registros'} />
-              <InfoBox label="Data do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.date : 'Sem registros'} />
-              <InfoBox label="Hora do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.time : 'Sem registros'} />
-              <InfoBox label="Dias sem treinar" value={selectedLatestWorkoutLog ? `${daysSince(selectedLatestWorkoutLog.completedAt)} dias` : 'Sem registros'} />
-              <InfoBox label="Treinos concluídos no mês" value={monthWorkoutCount(selectedWorkoutLogs)} />
-              <InfoBox label="Aderência ao plano" value={`${planAdherence(data, currentStudent, selectedWorkoutLogs)}%`} />
-              <InfoBox label="Último check-in" value={selectedCheckIns[0] ? formatDate(selectedCheckIns[0].date) : 'Sem registros'} />
-              <InfoBox label="Status financeiro do aluno" value={selectedFinancialStatus ? `${selectedFinancialStatus.status} - ${formatDate(selectedFinancialStatus.dueDate)}` : 'Sem registro'} />
-              <InfoBox label="Periodização ativa" value={selectedPeriodization ? `${selectedPeriodization.weeks} semanas` : 'Sem periodização ativa'} />
+              <InfoBox label="Último treino" value={selectedLatestWorkoutLog ? workoutName(data, selectedLatestWorkoutLog.workoutId) : 'Sem registros'} />
+              <InfoBox label="Aderência" value={`${planAdherence(data, currentStudent, selectedWorkoutLogs)}%`} />
             </div>
+            <button className="btn-secondary w-full sm:w-auto" onClick={() => setShowStudentSummary(!showStudentSummary)}>
+              {showStudentSummary ? 'Ocultar resumo' : 'Ver resumo do aluno'}
+            </button>
+            {showStudentSummary && (
+              <Stack>
+                {!hasSelectedStudentData && <Empty title="Este aluno ainda não possui dados suficientes." text="Registre treinos, check-ins, pagamentos ou periodização para enriquecer o resumo." />}
+                <div className="grid grid-cols-2 gap-2 md:gap-3 xl:grid-cols-4">
+                  <InfoBox label="Nome do aluno" value={studentDisplayName(currentStudent)} />
+                  <InfoBox label="Peso inicial" value={`${evolutionSummary?.initialWeight ?? 0} kg`} />
+                  <InfoBox label="Peso atual" value={`${evolutionSummary?.currentWeight ?? 0} kg`} />
+                  <InfoBox label="Gordura inicial" value={evolutionSummary?.assessmentCount ? `${evolutionSummary.initialBodyFat}%` : 'Sem registro'} />
+                  <InfoBox label="Gordura atual" value={evolutionSummary?.assessmentCount ? `${evolutionSummary.currentBodyFat}%` : 'Sem registro'} />
+                  <InfoBox label="Fonte dos dados" value={evolutionSummary?.source ?? '-'} />
+                  <InfoBox label="Último treino realizado" value={selectedLatestWorkoutLog ? workoutName(data, selectedLatestWorkoutLog.workoutId) : 'Sem registros'} />
+                  <InfoBox label="Data do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.date : 'Sem registros'} />
+                  <InfoBox label="Hora do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.time : 'Sem registros'} />
+                  <InfoBox label="Dias sem treinar" value={selectedLatestWorkoutLog ? `${daysSince(selectedLatestWorkoutLog.completedAt)} dias` : 'Sem registros'} />
+                  <InfoBox label="Treinos concluídos no mês" value={monthWorkoutCount(selectedWorkoutLogs)} />
+                  <InfoBox label="Aderência ao plano" value={`${planAdherence(data, currentStudent, selectedWorkoutLogs)}%`} />
+                  <InfoBox label="Último check-in" value={selectedCheckIns[0] ? formatDate(selectedCheckIns[0].date) : 'Sem registros'} />
+                  <InfoBox label="Status financeiro" value={selectedFinancialStatus ? `${selectedFinancialStatus.status} - ${formatDate(selectedFinancialStatus.dueDate)}` : 'Sem registro'} />
+                  <InfoBox label="Periodização ativa" value={selectedPeriodization ? `${selectedPeriodization.weeks} semanas` : 'Sem periodização ativa'} />
+                </div>
 
-            <Panel title="Peso e gordura do aluno">
-              {selectedChart.length ? (
-                <>
-                  <div className="h-72">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={selectedChart}>
-                        <CartesianGrid stroke="#1d2b3d" />
-                        <XAxis dataKey="name" stroke="#94a3b8" />
-                        <YAxis stroke="#94a3b8" />
-                        <Tooltip contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }} />
-                        <Bar dataKey="peso" name="Peso (kg)" fill="#35e68c" radius={[6, 6, 0, 0]} />
-                        <Bar dataKey="gordura" name="Gordura (%)" fill="#38bdf8" radius={[6, 6, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
+                <Panel title="Peso e gordura do aluno">
+                  <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                    {dashboardEvolutionMetrics.map((metric) => (
+                      <div key={metric.label} className={`rounded-lg border p-3 ${metric.tone === 'green' ? 'border-fitgreen/35 bg-fitgreen/10' : 'border-fitblue/35 bg-fitblue/10'}`}>
+                        <p className="text-sm font-semibold text-slate-300 md:text-xs md:uppercase md:tracking-[0.14em]">{metric.label}</p>
+                        <p className="mt-1 text-2xl font-black text-white md:text-xl">{metric.value}</p>
+                      </div>
+                    ))}
                   </div>
-                </>
-              ) : <Empty title="Este aluno ainda não possui dados de peso." text="Informe peso no cadastro ou registre uma avaliação física." />}
-              <p className="mt-3 text-xs text-slate-500">Total de avaliações carregadas: {data.assessments.length}</p>
-              <p className="text-xs text-slate-500">Total do aluno selecionado: {selectedAssessments.length}</p>
-            </Panel>
+                  {hasDashboardWeightData ? (
+                    <div className="h-56 md:h-60">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={selectedChart} layout="vertical" margin={{ top: 8, right: 16, left: 12, bottom: 8 }}>
+                          <CartesianGrid stroke="#1d2b3d" />
+                          <XAxis type="number" stroke="#94a3b8" tick={{ fontSize: 12 }} />
+                          <YAxis dataKey="name" type="category" stroke="#cbd5e1" width={108} tick={{ fontSize: 13, fontWeight: 700 }} />
+                          <Tooltip
+                            formatter={(value, _name, item) => [`${value} ${(item.payload as { unidade?: string }).unidade ?? ''}`, item.payload.name]}
+                            contentStyle={{ background: '#0d1726', border: '1px solid #1d2b3d' }}
+                          />
+                          <Bar dataKey="valor" name="Valor" fill="#38bdf8" radius={[0, 6, 6, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : <Empty title="Este aluno ainda não possui dados de peso registrados." text="Informe peso no cadastro ou registre uma avaliação física." />}
+                </Panel>
 
-            <WorkoutLogHistory data={data} logs={selectedWorkoutLogs} showStudent={false} emptyText="Este aluno ainda não concluiu nenhum treino." />
+                <Panel title="Histórico de treinos realizados">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <InfoBox label="Total concluído" value={selectedWorkoutLogs.length} />
+                    <InfoBox label="Último treino" value={selectedLatestWorkoutLog ? workoutName(data, selectedLatestWorkoutLog.workoutId) : 'Sem registros'} />
+                    <InfoBox label="Data do último treino" value={selectedLatestWorkoutLog ? selectedLatestWorkoutDateTime.date : 'Sem registros'} />
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                    <button className={`btn-secondary ${workoutHistoryFilter === 'today' ? '!border-fitblue !bg-fitblue/15' : ''}`} onClick={() => { setWorkoutHistoryFilter('today'); setShowWorkoutHistory(true); }}>Hoje</button>
+                    <button className={`btn-secondary ${workoutHistoryFilter === 'week' ? '!border-fitblue !bg-fitblue/15' : ''}`} onClick={() => { setWorkoutHistoryFilter('week'); setShowWorkoutHistory(true); }}>Últimos 7 dias</button>
+                    <button className={`btn-secondary ${workoutHistoryFilter === 'month' ? '!border-fitblue !bg-fitblue/15' : ''}`} onClick={() => { setWorkoutHistoryFilter('month'); setShowWorkoutHistory(true); }}>Este mês</button>
+                    <Input label="Escolher data" type="date" value={workoutHistoryDate} onChange={(value) => { setWorkoutHistoryDate(value); setWorkoutHistoryFilter('date'); setShowWorkoutHistory(true); }} />
+                  </div>
+                  <button className="btn-secondary mt-3 w-full sm:w-auto" onClick={() => setShowWorkoutHistory(!showWorkoutHistory)}>
+                    {showWorkoutHistory ? 'Ocultar histórico' : 'Ver histórico'}
+                  </button>
+                  {showWorkoutHistory ? (
+                    workoutHistoryFilter ? (
+                      <WorkoutLogHistory data={data} logs={selectedFilteredWorkoutLogs} showStudent={false} emptyText="Nenhum treino encontrado para o período selecionado." compactLimit={3} />
+                    ) : (
+                      <Empty title="Selecione um período para visualizar os treinos." text="Use os filtros acima para abrir o histórico do aluno." />
+                    )
+                  ) : null}
+                </Panel>
+              </Stack>
+            )}
           </Stack>
         ) : (
           <Empty title="Nenhum aluno selecionado" text="Selecione um aluno no seletor superior para ver o resumo individual." />
@@ -828,6 +990,7 @@ function AdminDashboard({
         </div>
       </Panel>
     </Stack>
+    </div>
   );
 }
 
@@ -1478,6 +1641,7 @@ function AnamnesisView({ data, student, commit }: { data: AppData; student: Stud
 }
 
 function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: Student; user: User; commit: (data: AppData, message?: string) => void }) {
+  const allWorkouts = (Array.isArray(data.workouts) ? data.workouts : []).map(normalizeWorkout);
   const createWorkoutForm = (studentId: string): Workout => ({
     id: '',
     studentId,
@@ -1501,11 +1665,11 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
   }, [student.id]);
   const save = async () => {
     if (!workout.name) return;
-    const nextWorkout = { ...workout, id: workout.id || makeId('w'), studentId: workout.studentId || student.id };
+    const nextWorkout = normalizeWorkout({ ...workout, id: workout.id || makeId('w'), studentId: workout.studentId || student.id, exercises: safeWorkoutExercises(workout) });
     try {
       const remoteId = await saveWorkoutRemote(nextWorkout, user.id);
-      const savedWorkout = { ...nextWorkout, id: remoteId ?? nextWorkout.id };
-      commit({ ...data, workouts: [...data.workouts.filter((item) => item.id !== nextWorkout.id), savedWorkout] }, workout.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
+      const savedWorkout = normalizeWorkout({ ...nextWorkout, id: remoteId ?? nextWorkout.id });
+      commit({ ...data, workouts: [...allWorkouts.filter((item) => item.id !== nextWorkout.id), savedWorkout] }, workout.id ? 'Atualizado com sucesso.' : 'Salvo com sucesso.');
       setWorkout(savedWorkout);
       setIsEditing(false);
     } catch (error) {
@@ -1514,7 +1678,7 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
     }
   };
   const editWorkout = (item: Workout) => {
-    setWorkout({ ...item, exercises: item.exercises.map((exercise) => ({ ...exercise })) });
+    setWorkout(normalizeWorkout(item));
     setIsEditing(false);
     scrollToTop();
   };
@@ -1524,7 +1688,7 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
       await deleteWorkoutRemote(item.id);
       commit({
         ...data,
-        workouts: data.workouts.filter((workoutItem) => workoutItem.id !== item.id),
+        workouts: allWorkouts.filter((workoutItem) => workoutItem.id !== item.id),
         workoutLogs: data.workoutLogs.filter((log) => log.workoutId !== item.id)
       }, 'Excluído com sucesso.');
       if (workout.id === item.id) {
@@ -1555,26 +1719,32 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
         </div>
         <h3 className="mt-6 font-semibold">Exercícios</h3>
         <div className="mt-3 space-y-3">
-          {workout.exercises.map((exercise, index) => (
-            <ExerciseEditor key={exercise.id} exercise={exercise} disabled={Boolean(workout.id) && !isEditing} onChange={(next) => setWorkout({ ...workout, exercises: workout.exercises.map((item, itemIndex) => (itemIndex === index ? next : item)) })} />
+          {safeWorkoutExercises(workout).map((exercise, index) => (
+            <ExerciseEditor key={exercise.id} exercise={exercise} disabled={Boolean(workout.id) && !isEditing} onChange={(next) => setWorkout({ ...workout, exercises: safeWorkoutExercises(workout).map((item, itemIndex) => (itemIndex === index ? next : item)) })} />
           ))}
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
-          {isEditing && <button className="btn-secondary w-full sm:w-auto" onClick={() => setWorkout({ ...workout, exercises: [...workout.exercises, emptyExercise()] })}><Plus size={16} /> Exercício</button>}
+          {isEditing && <button className="btn-secondary w-full sm:w-auto" onClick={() => setWorkout({ ...workout, exercises: [...safeWorkoutExercises(workout), emptyExercise()] })}><Plus size={16} /> Exercício</button>}
           {workout.id && !isEditing ? (
             <button className="btn-secondary w-full sm:w-auto" onClick={() => setIsEditing(true)}>Editar treino</button>
           ) : (
             <button className="btn-primary w-full sm:w-auto" onClick={save}>{workout.id ? 'Salvar alterações' : 'Salvar treino'}</button>
           )}
-          {workout.id && isEditing && <button className="btn-secondary w-full sm:w-auto" onClick={() => { const original = data.workouts.find((item) => item.id === workout.id); if (original) { setWorkout({ ...original, exercises: original.exercises.map((exercise) => ({ ...exercise })) }); setIsEditing(false); } }}>Cancelar</button>}
+          {workout.id && isEditing && <button className="btn-secondary w-full sm:w-auto" onClick={() => { const original = allWorkouts.find((item) => item.id === workout.id); if (original) { setWorkout(normalizeWorkout(original)); setIsEditing(false); } }}>Cancelar</button>}
           {workout.id && <button className="btn-secondary w-full sm:w-auto" onClick={() => { setWorkout(createWorkoutForm(student.id)); setIsEditing(true); }}>Novo treino</button>}
         </div>
       </Panel>
       <div className="grid gap-3 lg:grid-cols-2">
-        {data.workouts.map((item) => (
+        {allWorkouts.map((item) => (
           <Panel key={item.id} title={item.name} action={<Badge label={studentName(data, item.studentId)} />}>
             <p className="text-sm text-slate-400">{item.objective} - {item.estimatedDuration} - {item.weeklyFrequency}</p>
-            <div className="mt-3 space-y-2">{item.exercises.map((exercise) => <Row key={exercise.id} title={exercise.name} meta={`${exercise.sets} x ${exercise.reps} - descanso ${exercise.rest}`} badge={exercise.status} />)}</div>
+            <div className="mt-3 space-y-2">
+              {safeWorkoutExercises(item).length ? (
+                safeWorkoutExercises(item).map((exercise) => <Row key={exercise.id} title={exercise.name || 'Exercício sem nome'} meta={`${exercise.sets || '-'} x ${exercise.reps || '-'} - descanso ${exercise.rest || '-'}`} badge={exercise.status} />)
+              ) : (
+                <p className="rounded-md border border-line bg-ink/40 p-3 text-sm text-slate-300">Este treino ainda não possui exercícios cadastrados.</p>
+              )}
+            </div>
             <div className="mt-4 flex flex-wrap gap-2">
               <button className="btn-secondary w-full sm:w-auto" onClick={() => editWorkout(item)}>Editar treino</button>
               <button className="btn-danger w-full sm:w-auto" onClick={() => deleteWorkout(item)}>Excluir treino</button>
@@ -2265,25 +2435,30 @@ function StudentTimeline({ data, studentId, waterRecords = [] }: { data: AppData
         <>
           <div className="space-y-0">
             {visibleEvents.map((event, index) => (
-              <div key={event.id} className="grid grid-cols-[34px_1fr] gap-3">
+              <div key={event.id} className={`grid grid-cols-[30px_1fr] gap-2 md:grid-cols-[34px_1fr] md:gap-3 ${!showAll && index >= 3 ? 'hidden md:grid' : ''}`}>
                 <div className="relative flex justify-center">
-                  <span className="z-10 grid h-8 w-8 place-items-center rounded-full border border-fitblue/30 bg-fitblue/10 text-xs font-black text-fitblue">{event.icon}</span>
-                  {index < visibleEvents.length - 1 && <span className="absolute top-8 h-full w-px bg-line" />}
+                  <span className="z-10 grid h-7 w-7 place-items-center rounded-full border border-fitblue/30 bg-fitblue/10 text-[11px] font-black text-fitblue md:h-8 md:w-8 md:text-xs">{event.icon}</span>
+                  {index < visibleEvents.length - 1 && <span className="absolute top-7 h-full w-px bg-line md:top-8" />}
                 </div>
-                <div className="pb-5">
-                  <div className="rounded-lg border border-line bg-ink/40 p-3">
-                    <p className="font-semibold text-slate-100">{event.title}</p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">{formatTimelineDate(event.date)}</p>
-                    <div className="mt-3 space-y-1">
-                      {event.details.map((detail) => <p key={detail} className="text-sm text-slate-300">{detail}</p>)}
+                <div className="pb-3 md:pb-5">
+                  <div className="rounded-lg border border-line bg-ink/40 p-2.5 md:p-3">
+                    <p className="text-sm font-semibold leading-snug text-slate-100 md:text-base">{event.title}</p>
+                    <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-slate-500 md:text-xs md:tracking-[0.14em]">{formatTimelineDate(event.date)}</p>
+                    <div className="mt-2 space-y-1 md:mt-3">
+                      {event.details.map((detail) => <p key={detail} className="break-words text-xs text-slate-300 md:text-sm">{detail}</p>)}
                     </div>
                   </div>
                 </div>
               </div>
             ))}
           </div>
+          {events.length > 3 && (
+            <button className="btn-secondary mt-2 w-full md:hidden" onClick={() => setShowAll(!showAll)}>
+              {showAll ? 'Mostrar menos' : 'Ver linha do tempo completa'}
+            </button>
+          )}
           {events.length > 10 && (
-            <button className="btn-secondary mt-2 w-full sm:w-auto" onClick={() => setShowAll(!showAll)}>
+            <button className="btn-secondary mt-2 hidden md:inline-flex" onClick={() => setShowAll(!showAll)}>
               {showAll ? 'Mostrar menos' : 'Ver linha do tempo completa'}
             </button>
           )}
@@ -2569,7 +2744,7 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
             </div>
           </div>
           {canEditWater && (
-            <div className="grid gap-2">
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
               <button className={waterButtonClass('250')} onClick={() => handleWaterChange(0.25, '250')}>💧 +250 ml</button>
               <button className={waterButtonClass('500')} onClick={() => handleWaterChange(0.5, '500')}>💧 +500 ml</button>
               <button className={waterButtonClass('1000')} onClick={() => handleWaterChange(1, '1000')}>💧 +1 litro</button>
@@ -2595,10 +2770,10 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
         </Panel>
 
         <Panel title="Conquistas">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {achievements.map((achievement) => (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-2">
+            {achievements.slice().sort((a, b) => Number(b.active) - Number(a.active)).map((achievement) => (
               <div key={achievement.label} className={`rounded-md border px-3 py-3 ${achievement.active ? 'border-fitgreen/40 bg-fitgreen/10' : 'border-line bg-ink/40'}`}>
-                <p className={`text-sm font-semibold ${achievement.active ? 'text-fitgreen' : 'text-slate-400'}`}>{achievement.label}</p>
+                <p className={`text-xs font-semibold leading-snug sm:text-sm ${achievement.active ? 'text-fitgreen' : 'text-slate-400'}`}>{achievement.label}</p>
                 <p className="mt-1 text-xs text-slate-500">{achievement.active ? 'Conquista ativa' : 'Ainda não liberada'}</p>
               </div>
             ))}
@@ -2611,12 +2786,26 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
   );
 }
 
-function WorkoutLogHistory({ data, logs, showStudent = true, emptyText = 'Quando o aluno concluir um treino, o registro aparecerá aqui.' }: { data: AppData; logs: WorkoutLog[]; showStudent?: boolean; emptyText?: string }) {
+function WorkoutLogHistory({
+  data,
+  logs,
+  showStudent = true,
+  emptyText = 'Quando o aluno concluir um treino, o registro aparecerá aqui.',
+  compactLimit
+}: {
+  data: AppData;
+  logs: WorkoutLog[];
+  showStudent?: boolean;
+  emptyText?: string;
+  compactLimit?: number;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const visibleLogs = compactLimit && !showAll ? logs.slice(0, compactLimit) : logs;
   return (
     <Panel title="Histórico de treinos realizados">
       {logs.length ? (
         <div className="space-y-3">
-          {logs.map((log) => {
+          {visibleLogs.map((log) => {
             const completed = formatDateTimeParts(log.completedAt);
             return (
               <div key={log.id} className="rounded-md border border-line bg-ink/40 p-3">
@@ -2630,6 +2819,11 @@ function WorkoutLogHistory({ data, logs, showStudent = true, emptyText = 'Quando
               </div>
             );
           })}
+          {compactLimit && logs.length > compactLimit && (
+            <button className="btn-secondary w-full sm:w-auto" onClick={() => setShowAll(!showAll)}>
+              {showAll ? 'Mostrar menos' : 'Ver mais'}
+            </button>
+          )}
         </div>
       ) : (
         <Empty title="Sem treinos concluídos" text={emptyText} />
@@ -2667,15 +2861,16 @@ function StudentDashboard({ data, student }: { data: AppData; student: Student }
 }
 
 function StudentWorkout({ data, student, commit }: { data: AppData; student: Student; commit: (data: AppData, message?: string) => void }) {
-  const workouts = data.workouts.filter((item) => item.studentId === student.id);
-  const updateWorkout = (workout: Workout) => commit({ ...data, workouts: data.workouts.map((item) => (item.id === workout.id ? workout : item)) }, 'Treino atualizado.');
+  const allWorkouts = (Array.isArray(data.workouts) ? data.workouts : []).map(normalizeWorkout);
+  const workouts = allWorkouts.filter((item) => item.studentId === student.id);
+  const updateWorkout = (workout: Workout) => commit({ ...data, workouts: allWorkouts.map((item) => (item.id === workout.id ? normalizeWorkout(workout) : item)) }, 'Treino atualizado.');
   const startWorkout = (workout: Workout) => updateWorkout({ ...workout, completed: false });
   const completeWorkout = async (workout: Workout) => {
     try {
       const workoutLog = await saveWorkoutLogRemote(workout.id, student.id, student.profileId);
       commit({
         ...data,
-        workouts: data.workouts.map((item) => (item.id === workout.id ? { ...workout, completed: true } : item)),
+        workouts: allWorkouts.map((item) => (item.id === workout.id ? normalizeWorkout({ ...workout, completed: true, exercises: safeWorkoutExercises(workout) }) : item)),
         workoutLogs: workoutLog ? [...data.workoutLogs, workoutLog] : data.workoutLogs
       }, 'Treino concluído.');
     } catch (error) {
@@ -2694,19 +2889,23 @@ function StudentWorkout({ data, student, commit }: { data: AppData; student: Stu
             </div>
           )}
           <div className="mt-4 space-y-3">
-            {workout.exercises.map((exercise) => (
-              <div key={exercise.id} className="rounded-md border border-line bg-ink/50 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="font-semibold">{exercise.name}</p>
-                    <p className="text-sm text-slate-400">{exercise.sets} séries - {exercise.reps} reps - descanso {exercise.rest}</p>
+            {safeWorkoutExercises(workout).length ? (
+              safeWorkoutExercises(workout).map((exercise) => (
+                <div key={exercise.id} className="rounded-md border border-line bg-ink/50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-semibold">{exercise.name || 'Exercício sem nome'}</p>
+                      <p className="text-sm text-slate-400">{exercise.sets || '-'} séries - {exercise.reps || '-'} reps - descanso {exercise.rest || '-'}</p>
+                    </div>
+                    <button className={exercise.status === 'concluido' ? 'chip-active' : 'chip'} onClick={() => updateWorkout({ ...workout, exercises: safeWorkoutExercises(workout).map((item) => (item.id === exercise.id ? { ...item, status: item.status === 'concluido' ? 'ativo' : 'concluido' } : item)) })}>{exercise.status === 'concluido' ? 'Concluído' : 'Concluir'}</button>
                   </div>
-                  <button className={exercise.status === 'concluido' ? 'chip-active' : 'chip'} onClick={() => updateWorkout({ ...workout, exercises: workout.exercises.map((item) => (item.id === exercise.id ? { ...item, status: item.status === 'concluido' ? 'ativo' : 'concluido' } : item)) })}>{exercise.status === 'concluido' ? 'Concluído' : 'Concluir'}</button>
+                  <p className="mt-2 text-sm text-slate-300">{exercise.notes}</p>
+                  {exercise.videoUrl && <a className="mt-2 inline-block text-sm text-fitblue" href={exercise.videoUrl} target="_blank">Vídeo explicativo</a>}
                 </div>
-                <p className="mt-2 text-sm text-slate-300">{exercise.notes}</p>
-                {exercise.videoUrl && <a className="mt-2 inline-block text-sm text-fitblue" href={exercise.videoUrl} target="_blank">Vídeo explicativo</a>}
-              </div>
-            ))}
+              ))
+            ) : (
+              <p className="rounded-md border border-line bg-ink/40 p-3 text-sm text-slate-300">Este treino ainda não possui exercícios cadastrados.</p>
+            )}
           </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-2">
             <button className="btn-secondary" onClick={() => startWorkout(workout)}>Iniciar treino</button>
@@ -2735,18 +2934,38 @@ function StudentCheckin({ data, student, commit }: { data: AppData; student: Stu
     <Stack>
       <PageTitle title="Check-in semanal" subtitle="Conte como foi sua semana para o plano evoluir com você." />
       <Panel title="Responder check-in">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Treinei quantas vezes?" type="number" value={String(form.trainingsDone)} onChange={(value) => setForm({ ...form, trainingsDone: Number(value) })} />
-          <Input label="Peso atual" type="number" value={String(form.currentWeight)} onChange={(value) => setForm({ ...form, currentWeight: Number(value) })} />
-          <Input label="Como me senti?" value={form.energy} onChange={(value) => setForm({ ...form, energy: value })} />
-          <Input label="Alimentação" value={form.food} onChange={(value) => setForm({ ...form, food: value })} />
-          <Input label="Sono" value={form.sleep} onChange={(value) => setForm({ ...form, sleep: value })} />
-          <ImageUpload label="Foto opcional" value={form.photo ? [form.photo] : []} onChange={(photos) => setForm({ ...form, photo: photos[0] ?? '' })} />
-          <Input label="Motivação 1 a 10" type="number" value={String(form.motivation)} onChange={(value) => setForm({ ...form, motivation: Number(value) })} />
-          <Input label="Estresse 1 a 10" type="number" value={String(form.stress)} onChange={(value) => setForm({ ...form, stress: Number(value) })} />
-          <Textarea label="Minha dificuldade" value={form.difficulty} onChange={(value) => setForm({ ...form, difficulty: value })} />
-          <Textarea label="Minha vitória" value={form.victory} onChange={(value) => setForm({ ...form, victory: value })} />
-          <Textarea label="Observações livres" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} />
+        <div className="space-y-3">
+          <div className="rounded-md border border-line bg-ink/35 p-3">
+            <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-fitblue">Estado de hoje</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input label="Treinei quantas vezes?" type="number" value={String(form.trainingsDone)} onChange={(value) => setForm({ ...form, trainingsDone: Number(value) })} />
+              <Input label="Peso atual" type="number" value={String(form.currentWeight)} onChange={(value) => setForm({ ...form, currentWeight: Number(value) })} />
+              <Input label="Como me senti?" value={form.energy} onChange={(value) => setForm({ ...form, energy: value })} />
+              <Input label="Motivação 1 a 10" type="number" value={String(form.motivation)} onChange={(value) => setForm({ ...form, motivation: Number(value) })} />
+              <Input label="Estresse 1 a 10" type="number" value={String(form.stress)} onChange={(value) => setForm({ ...form, stress: Number(value) })} />
+            </div>
+          </div>
+          <div className="rounded-md border border-line bg-ink/35 p-3">
+            <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-fitblue">Alimentação e sono</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input label="Alimentação" value={form.food} onChange={(value) => setForm({ ...form, food: value })} />
+              <Input label="Sono" value={form.sleep} onChange={(value) => setForm({ ...form, sleep: value })} />
+            </div>
+          </div>
+          <div className="rounded-md border border-line bg-ink/35 p-3">
+            <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-fitblue">Dificuldades e vitórias</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Textarea label="Minha dificuldade" value={form.difficulty} onChange={(value) => setForm({ ...form, difficulty: value })} />
+              <Textarea label="Minha vitória" value={form.victory} onChange={(value) => setForm({ ...form, victory: value })} />
+            </div>
+          </div>
+          <div className="rounded-md border border-line bg-ink/35 p-3">
+            <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-fitblue">Observações e foto</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Textarea label="Observações livres" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} />
+              <ImageUpload label="Foto opcional" value={form.photo ? [form.photo] : []} onChange={(photos) => setForm({ ...form, photo: photos[0] ?? '' })} />
+            </div>
+          </div>
         </div>
         <button className="btn-primary mt-5 w-full sm:w-auto" onClick={save}>Enviar check-in</button>
       </Panel>
@@ -2833,23 +3052,23 @@ function HistoryList({ assessments, onView, onEdit, onDelete }: { assessments: P
 }
 
 function Stack({ children }: { children: React.ReactNode }) {
-  return <div className="space-y-4">{children}</div>;
+  return <div className="space-y-3 md:space-y-4">{children}</div>;
 }
 
 function PageTitle({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div>
-      <h1 className="text-2xl font-black sm:text-3xl">{title}</h1>
-      <p className="mt-1 text-sm text-slate-400">{subtitle}</p>
+      <h1 className="text-[23px] font-black leading-tight sm:text-3xl">{title}</h1>
+      <p className="mt-1 text-xs leading-relaxed text-slate-400 sm:text-sm">{subtitle}</p>
     </div>
   );
 }
 
 function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-lg border border-line bg-panel p-3 shadow-[0_10px_30px_rgba(0,0,0,.18)] sm:p-4">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <h2 className="font-bold">{title}</h2>
+    <section className="overflow-hidden rounded-lg border border-line bg-panel p-2.5 shadow-[0_10px_30px_rgba(0,0,0,.18)] sm:p-4">
+      <div className="mb-3 flex flex-col gap-2 sm:mb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+        <h2 className="text-sm font-bold leading-tight sm:text-base">{title}</h2>
         {action}
       </div>
       {children}
@@ -2860,14 +3079,14 @@ function Panel({ title, action, children }: { title: string; action?: React.Reac
 function StatCard({ label, value, icon: Icon, accent }: { label: string; value: string | number; icon: IconComponent; accent: 'blue' | 'orange' | 'green' }) {
   const color = accent === 'blue' ? 'text-fitblue' : accent === 'orange' ? 'text-fitorange' : 'text-fitgreen';
   return (
-    <div className="rounded-lg border border-line bg-[linear-gradient(135deg,rgba(13,23,38,.98),rgba(10,29,38,.82))] p-4 shadow-[0_12px_34px_rgba(0,0,0,.18)]">
+    <div className="rounded-lg border border-line bg-[linear-gradient(135deg,rgba(13,23,38,.98),rgba(10,29,38,.82))] p-3 shadow-[0_12px_34px_rgba(0,0,0,.18)] sm:p-4">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-slate-400">{label}</p>
-        <div className="grid h-9 w-9 place-items-center rounded-md border border-white/10 bg-white/5">
+        <p className="text-xs leading-snug text-slate-400 sm:text-sm">{label}</p>
+        <div className="grid h-8 w-8 place-items-center rounded-md border border-white/10 bg-white/5 sm:h-9 sm:w-9">
           <Icon className={color} size={20} />
         </div>
       </div>
-      <p className="mt-3 truncate text-2xl font-black">{value}</p>
+      <p className="mt-2 truncate text-xl font-black sm:mt-3 sm:text-2xl">{value}</p>
     </div>
   );
 }
@@ -2883,7 +3102,7 @@ function NavButton({ active, icon: Icon, label, onClick }: { active: boolean; ic
 
 function MobileTab({ active, icon: Icon, label, onClick }: { active: boolean; icon: IconComponent; label: string; onClick: () => void }) {
   return (
-    <button className={`flex flex-col items-center gap-1 rounded-md px-1 py-2 text-[11px] ${active ? 'bg-fitgreen text-ink' : 'text-slate-400'}`} onClick={onClick}>
+    <button className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-md px-1 py-2 text-[10px] sm:text-[11px] ${active ? 'bg-fitgreen text-ink' : 'text-slate-400'}`} onClick={onClick}>
       <Icon size={18} />
       <span className="truncate">{label}</span>
     </button>
@@ -2959,9 +3178,9 @@ function ImageUpload({ label, value, onChange, multiple = false, disabled = fals
 
 function InfoBox({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-md border border-line bg-ink/40 p-3">
-      <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{label}</p>
-      <p className="mt-1 text-sm text-slate-200">{value || '-'}</p>
+    <div className="rounded-md border border-line bg-ink/40 p-2.5 sm:p-3">
+      <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500 sm:text-xs sm:tracking-[0.14em]">{label}</p>
+      <p className="mt-1 break-words text-xs text-slate-200 sm:text-sm">{value || '-'}</p>
     </div>
   );
 }

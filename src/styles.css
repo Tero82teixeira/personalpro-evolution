@@ -247,6 +247,117 @@
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
     z-index: 5;
   }
+
+  @media (max-width: 767px) {
+    .field {
+      @apply px-3 py-2 text-sm;
+    }
+
+    .btn-primary,
+    .btn-secondary,
+    .btn-danger {
+      @apply min-h-11 px-3 py-2 text-sm;
+    }
+
+    .chip,
+    .chip-active {
+      @apply px-2.5 py-1 text-xs;
+    }
+
+    textarea.field {
+      min-height: 4.75rem;
+    }
+
+    .water-bottle-card {
+      min-height: 12rem;
+      padding: 0.75rem;
+    }
+
+    .water-bottle-body {
+      height: 8.75rem;
+      width: 4.25rem;
+      border-radius: 1.1rem 1.1rem 1.35rem 1.35rem;
+    }
+
+    .water-bottle-neck {
+      height: 1rem;
+      width: 2.35rem;
+    }
+
+    .water-bottle-cap {
+      width: 2.05rem;
+    }
+
+    .water-bottle-reflection {
+      height: 4.8rem;
+      left: 0.62rem;
+      top: 0.85rem;
+    }
+
+    .water-bottle-side-glow {
+      height: 6.3rem;
+    }
+
+    .water-bottle-percent {
+      font-size: 0.95rem;
+    }
+
+    .recharts-responsive-container {
+      min-height: 210px;
+    }
+
+    .admin-dashboard {
+      font-size: 16px;
+    }
+
+    .admin-dashboard h1 {
+      font-size: 28px !important;
+      line-height: 1.12 !important;
+    }
+
+    .admin-dashboard section h2 {
+      font-size: 20px !important;
+      line-height: 1.25 !important;
+    }
+
+    .admin-dashboard section p {
+      font-size: 16px !important;
+      line-height: 1.38 !important;
+    }
+
+    .admin-dashboard section p[class*="uppercase"] {
+      font-size: 14px !important;
+      letter-spacing: 0.08em !important;
+    }
+
+    .admin-dashboard section p.font-black,
+    .admin-dashboard section .text-xl,
+    .admin-dashboard section .text-2xl,
+    .admin-dashboard section .text-3xl,
+    .admin-dashboard section .text-4xl {
+      font-size: 28px !important;
+      line-height: 1.12 !important;
+    }
+
+    .admin-dashboard .btn-primary,
+    .admin-dashboard .btn-secondary,
+    .admin-dashboard .btn-danger {
+      font-size: 16px !important;
+      min-height: 46px;
+    }
+
+    .admin-dashboard input,
+    .admin-dashboard select {
+      font-size: 16px !important;
+      min-height: 44px;
+    }
+
+    .admin-dashboard .recharts-text,
+    .admin-dashboard .recharts-cartesian-axis-tick-value {
+      font-size: 14px !important;
+      font-weight: 700;
+    }
+  }
 }
 
 @keyframes water-confetti-fall {
@@ -291,5 +402,103 @@
 
   50% {
     transform: translateX(8%) translateY(0.12rem);
+  }
+}
+
+@media (max-width: 767px) {
+  html,
+  body,
+  #root {
+    font-size: 16px;
+  }
+
+  main {
+    font-size: 16px;
+  }
+
+  main h1 {
+    font-size: 26px !important;
+    line-height: 1.15 !important;
+  }
+
+  main h2,
+  main h3 {
+    font-size: 20px !important;
+    line-height: 1.25 !important;
+  }
+
+  main p,
+  main li {
+    font-size: 16px !important;
+    line-height: 1.42 !important;
+  }
+
+  main label,
+  main label span,
+  main .text-xs,
+  main .text-\[10px\],
+  main .text-\[11px\],
+  main .text-\[12px\] {
+    font-size: 14px !important;
+    line-height: 1.35 !important;
+  }
+
+  main .text-sm,
+  main .text-base {
+    font-size: 16px !important;
+    line-height: 1.42 !important;
+  }
+
+  main .text-lg {
+    font-size: 18px !important;
+    line-height: 1.35 !important;
+  }
+
+  main .text-xl,
+  main .text-2xl,
+  main .text-3xl,
+  main .text-4xl {
+    font-size: 24px !important;
+    line-height: 1.18 !important;
+  }
+
+  input,
+  select,
+  textarea,
+  button,
+  .field,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
+    font-size: 16px !important;
+  }
+
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
+    min-height: 46px;
+  }
+
+  textarea.field {
+    min-height: 5rem;
+  }
+
+  main nav.fixed button {
+    min-height: 58px;
+  }
+
+  main nav.fixed button span {
+    font-size: 12px !important;
+    line-height: 1.15 !important;
+  }
+
+  main nav.fixed button span[aria-hidden="true"] {
+    font-size: 13px !important;
+  }
+
+  main .recharts-text,
+  main .recharts-cartesian-axis-tick-value {
+    font-size: 14px !important;
+    font-weight: 700;
   }
 }

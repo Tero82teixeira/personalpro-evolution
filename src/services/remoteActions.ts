@@ -1,4 +1,5 @@
 import type { Anamnesis, CheckIn, Exercise, Payment, Periodization, PhysicalAssessment, Student, Workout, WorkoutLog } from '../types';
+import { makeSafeId } from './storage';
 import { requireSupabase } from './supabase/client';
 import { isSupabaseConfigured } from './supabase/config';
 
@@ -281,7 +282,7 @@ export async function deletePeriodizationRemote(periodizationId: string) {
 export async function saveWorkoutLogRemote(workoutId: string, studentId: string, profileId?: string): Promise<WorkoutLog | undefined> {
   const completedAt = new Date().toISOString();
   const log: WorkoutLog = {
-    id: `log-${crypto.randomUUID()}`,
+    id: makeSafeId('log'),
     workoutId,
     studentId,
     profileId,
