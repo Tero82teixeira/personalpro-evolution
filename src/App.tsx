@@ -113,6 +113,8 @@ type AdminTab =
   | 'messages'
   | 'marketing';
 type StudentTab = 'home' | 'workout' | 'journey' | 'evolution' | 'checkin' | 'profile';
+const personalName = 'Ronaldo';
+const personalWhatsAppNumber = '5528999410462';
 
 const adminTabs: { id: AdminTab; label: string; icon: IconComponent }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
@@ -741,6 +743,19 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
     scrollToTop();
   };
   if (!student) return <Empty title="Perfil não encontrado" text="Entre em contato com o personal." />;
+  const openPersonalWhatsApp = () => {
+    const studentNameForMessage = studentDisplayName(student) || 'aluno';
+    const messages: Record<StudentTab, string> = {
+      home: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre meu acompanhamento no PersonalPro Evolution.`,
+      workout: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre meu treino de hoje.`,
+      journey: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre minha jornada/evolução.`,
+      evolution: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre minha evolução.`,
+      checkin: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre meu check-in.`,
+      profile: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre meu acompanhamento no PersonalPro Evolution.`
+    };
+    const url = `https://wa.me/${personalWhatsAppNumber}?text=${encodeURIComponent(messages[tab])}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
 
   return (
     <div className="mx-auto max-w-4xl px-3 pb-32 pt-4 sm:px-4 md:pb-24 md:pt-5">
@@ -754,6 +769,13 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
       {tab === 'evolution' && <EvolutionView data={data} student={student} compact />}
       {tab === 'checkin' && <StudentCheckin data={data} student={student} commit={commit} />}
       {tab === 'profile' && <StudentProfile data={data} student={student} commit={commit} />}
+      <button
+        className="fixed bottom-[88px] right-3 z-40 inline-flex min-h-[48px] items-center justify-center gap-2 rounded-full border border-emerald-300/40 bg-[#25D366] px-4 py-3 text-base font-black text-slate-950 shadow-[0_14px_30px_rgba(37,211,102,0.28)] transition hover:-translate-y-0.5 hover:bg-[#2FE374] md:bottom-6 md:right-6"
+        onClick={openPersonalWhatsApp}
+      >
+        <span aria-hidden="true">💬</span>
+        <span>Falar com o Personal</span>
+      </button>
       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-line bg-ink/95 px-2 py-2 backdrop-blur">
         <div className="mx-auto grid max-w-4xl grid-cols-6 gap-1">
           {studentTabs.map((item) => (
