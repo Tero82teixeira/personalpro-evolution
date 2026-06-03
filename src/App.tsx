@@ -1914,12 +1914,14 @@ function CheckinsView({
   commit: (data: AppData, message?: string) => void;
 }) {
   const [copyFeedback, setCopyFeedback] = useState('');
+  const [expandedCheckIns, setExpandedCheckIns] = useState<Record<string, boolean>>({});
   const currentStudent = selectedStudent ?? data.students.find((student) => student.id === selectedStudentId);
   const selectedCheckins = data.checkIns.filter(
     (item) => item.studentId === selectedStudentId
   ).sort((a, b) => getCheckInDateValue(b).localeCompare(getCheckInDateValue(a)));
   useEffect(() => {
     setCopyFeedback('');
+    setExpandedCheckIns({});
   }, [selectedStudentId]);
   const copyReminder = async () => {
     const student = currentStudent;
@@ -1953,32 +1955,47 @@ function CheckinsView({
           {selectedCheckins.map((checkIn) => {
             const checkInStudent = data.students.find((student) => student.id === checkIn.studentId) ?? currentStudent;
             const photoUrl = getCheckInPhotoUrl(checkIn);
+            const expanded = Boolean(expandedCheckIns[checkIn.id]);
             return (
               <Panel key={checkIn.id} title={`Check-in de ${checkInStudent ? studentDisplayName(checkInStudent) : studentName(data, checkIn.studentId)}`}>
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  <InfoBox label="Aluno" value={checkInStudent ? studentDisplayName(checkInStudent) : studentName(data, checkIn.studentId)} />
                   <InfoBox label="Data do check-in" value={formatDate(getCheckInDateValue(checkIn))} />
-                  <InfoBox label="Treinos feitos" value={`${checkIn.trainingsDone} na semana`} />
                   <InfoBox label="Peso atual" value={checkIn.currentWeight ? `${checkIn.currentWeight} kg` : 'Não informado'} />
-                  <InfoBox label="Como me senti" value={checkIn.energy || 'Não informado'} />
-                  <InfoBox label="Sono" value={checkIn.sleep || 'Não informado'} />
-                  <InfoBox label="Alimentação" value={checkIn.food || 'Não informado'} />
-                  <InfoBox label="Energia" value={checkIn.energy || 'Não informado'} />
                   <InfoBox label="Motivação" value={`${checkIn.motivation || 0}/10`} />
-                  <InfoBox label="Estresse" value={`${checkIn.stress || 0}/10`} />
-                  <InfoBox label="Objetivos" value={checkInStudent?.goal || 'Não informado'} />
-                  <InfoBox label="Metas" value={checkInStudent?.target || 'Não informado'} />
-                  <InfoBox label="Minha dificuldade" value={checkIn.difficulty || 'Não informado'} />
-                  <InfoBox label="Minha vitória" value={checkIn.victory || 'Não informado'} />
-                  <InfoBox label="Observações livres" value={checkIn.notes || 'Não informado'} />
+                  <InfoBox label="Status" value={<Badge label="Respondido" />} />
                 </div>
-                <div className="mt-4 rounded-md border border-line bg-ink/40 p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Foto anexada</p>
-                  {photoUrl ? (
-                    <img src={photoUrl} alt="Foto anexada ao check-in" className="mt-3 max-h-80 w-full rounded-md border border-line object-cover" />
-                  ) : (
-                    <p className="mt-2 text-sm text-slate-300">Sem foto anexada.</p>
-                  )}
-                </div>
+                <button
+                  className="btn-secondary mt-4 w-full sm:w-auto"
+                  onClick={() => setExpandedCheckIns({ ...expandedCheckIns, [checkIn.id]: !expanded })}
+                >
+                  {expanded ? 'Ocultar check-in completo' : 'Ver check-in completo'}
+                </button>
+                {expanded && (
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <InfoBox label="Treinos feitos" value={`${checkIn.trainingsDone} na semana`} />
+                      <InfoBox label="Como me senti" value={checkIn.energy || 'Não informado'} />
+                      <InfoBox label="Sono" value={checkIn.sleep || 'Não informado'} />
+                      <InfoBox label="Alimentação" value={checkIn.food || 'Não informado'} />
+                      <InfoBox label="Energia" value={checkIn.energy || 'Não informado'} />
+                      <InfoBox label="Estresse" value={`${checkIn.stress || 0}/10`} />
+                      <InfoBox label="Objetivos" value={checkInStudent?.goal || 'Não informado'} />
+                      <InfoBox label="Metas" value={checkInStudent?.target || 'Não informado'} />
+                      <InfoBox label="Minha dificuldade" value={checkIn.difficulty || 'Não informado'} />
+                      <InfoBox label="Minha vitória" value={checkIn.victory || 'Não informado'} />
+                      <InfoBox label="Observações livres" value={checkIn.notes || 'Não informado'} />
+                    </div>
+                    <div className="rounded-md border border-line bg-ink/40 p-3">
+                      <p className="text-xs uppercase tracking-[0.14em] text-slate-500">Foto anexada</p>
+                      {photoUrl ? (
+                        <img src={photoUrl} alt="Foto anexada ao check-in" className="mt-3 max-h-80 w-full rounded-md border border-line object-cover" />
+                      ) : (
+                        <p className="mt-2 text-sm text-slate-300">Sem foto anexada.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <button className="btn-danger mt-4 w-full sm:w-auto" onClick={() => deleteCheckIn(checkIn)}>Excluir check-in</button>
               </Panel>
             );
@@ -2388,8 +2405,16 @@ function buildStudentTimeline(studentId: string, data: AppData, waterRecords: Wa
       details: [`Treino: ${workoutName(data, log.workoutId)}`, `Status: ${log.status === 'concluido' ? 'Concluído' : log.status}`]
     }));
 
-  const checkInEvents = data.checkIns
-    .filter((checkIn) => studentIdFromRecord(checkIn) === studentId)
+  const uniqueCheckIns = Array.from(
+    new Map(
+      data.checkIns
+        .filter((checkIn) => studentIdFromRecord(checkIn) === studentId)
+        .sort((a, b) => getCheckInDateValue(b).localeCompare(getCheckInDateValue(a)))
+        .map((checkIn) => [getCheckInDateValue(checkIn), checkIn])
+    ).values()
+  );
+
+  const checkInEvents = uniqueCheckIns
     .map<TimelineEvent>((checkIn) => ({
       id: `checkin-${checkIn.id}`,
       icon: 'C',
@@ -2397,7 +2422,7 @@ function buildStudentTimeline(studentId: string, data: AppData, waterRecords: Wa
       date: getCheckInDateValue(checkIn),
       details: [
         checkIn.currentWeight ? `Peso atual: ${checkIn.currentWeight} kg` : '',
-        checkIn.energy ? `Energia: ${checkIn.energy}` : '',
+        checkIn.energy ? `Como me senti: ${checkIn.energy}` : '',
         checkIn.motivation ? `Motivação: ${checkIn.motivation}/10` : '',
         checkIn.difficulty ? `Dificuldade: ${checkIn.difficulty}` : '',
         checkIn.victory ? `Vitória: ${checkIn.victory}` : ''
@@ -3103,7 +3128,7 @@ function StudentCheckin({ data, student, commit }: { data: AppData; student: Stu
             />
             {!selectedCheckIn ? (
               <p className="rounded-md border border-line bg-ink/40 p-3 text-sm text-slate-300">
-                Selecione uma data para visualizar o check-in respondido.
+                Selecione uma data para visualizar seu check-in respondido.
               </p>
             ) : (
               <div className="rounded-lg border border-line bg-ink/40 p-3">
