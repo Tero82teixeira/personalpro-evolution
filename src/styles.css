@@ -40,6 +40,47 @@
     @apply inline-flex items-center justify-center gap-2 rounded-md border border-fitorange/40 bg-fitorange/10 px-4 py-2.5 text-sm font-bold text-fitorange transition hover:bg-fitorange hover:text-ink;
   }
 
+  .student-whatsapp-button {
+    position: fixed !important;
+    right: 0.75rem !important;
+    bottom: 88px !important;
+    z-index: 80 !important;
+    display: inline-flex !important;
+    min-height: 48px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid rgba(167, 243, 208, 0.45);
+    border-radius: 9999px;
+    background: #25d366;
+    box-shadow: 0 14px 30px rgba(37, 211, 102, 0.28);
+    color: #06101d;
+    font-size: 1rem;
+    font-weight: 900;
+    padding: 0.75rem 1rem;
+    text-decoration: none;
+    transition: transform 0.2s ease, filter 0.2s ease, background 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .student-whatsapp-button:hover {
+    background: #2fe374;
+    filter: brightness(1.02);
+    transform: translateY(-2px);
+  }
+
+  .student-whatsapp-button:focus-visible {
+    outline: 2px solid rgba(187, 247, 208, 0.9);
+    outline-offset: 3px;
+  }
+
+  @media (min-width: 768px) {
+    .student-whatsapp-button {
+      right: 24px !important;
+      bottom: 24px !important;
+    }
+  }
+
   .icon-btn {
     @apply grid h-10 w-10 place-items-center rounded-md border border-line bg-panel text-slate-200 transition hover:border-fitblue hover:text-fitblue;
   }

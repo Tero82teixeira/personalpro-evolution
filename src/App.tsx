@@ -770,8 +770,10 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
       {tab === 'checkin' && <StudentCheckin data={data} student={student} commit={commit} />}
       {tab === 'profile' && <StudentProfile data={data} student={student} commit={commit} />}
       <button
-        className="fixed bottom-[88px] right-3 z-40 inline-flex min-h-[48px] items-center justify-center gap-2 rounded-full border border-emerald-300/40 bg-[#25D366] px-4 py-3 text-base font-black text-slate-950 shadow-[0_14px_30px_rgba(37,211,102,0.28)] transition hover:-translate-y-0.5 hover:bg-[#2FE374] md:bottom-6 md:right-6"
+        type="button"
+        className="student-whatsapp-button"
         onClick={openPersonalWhatsApp}
+        aria-label="Falar com o Personal pelo WhatsApp"
       >
         <span aria-hidden="true">💬</span>
         <span>Falar com o Personal</span>
