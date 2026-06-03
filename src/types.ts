@@ -181,6 +181,19 @@ export interface MarketingIdea {
   content: string;
 }
 
+export interface PersonalSettings {
+  personalName: string;
+  personalWhatsApp: string;
+  instagram: string;
+  brandName: string;
+  slogan: string;
+  whatsappMessage: string;
+  whatsappMessageTemplate: string;
+  professionalEmail: string;
+  serviceCity: string;
+  notes: string;
+}
+
 export interface AppData {
   users: User[];
   students: Student[];
@@ -193,4 +206,5 @@ export interface AppData {
   payments: Payment[];
   messages: MessageTemplate[];
   marketingIdeas: MarketingIdea[];
+  personalSettings: PersonalSettings;
 }

@@ -1,19 +1,50 @@
 import { seedData } from '../data/seed';
-import type { AppData } from '../types';
+import { defaultPersonalSettings } from '../data/defaultSettings';
+import type { AppData, PersonalSettings } from '../types';
 import { requireSupabase } from './supabase/client';
 import { isSupabaseConfigured } from './supabase/config';
 
 const DATA_KEY = 'personalpro:data';
 const SESSION_KEY = 'personalpro:session';
+const SETTINGS_KEY = 'personalpro-personal-settings';
+const LEGACY_SETTINGS_KEY = 'personalpro:settings';
+
+export { defaultPersonalSettings };
+
+export function loadPersonalSettings(): PersonalSettings {
+  try {
+    const stored = localStorage.getItem(SETTINGS_KEY) ?? localStorage.getItem(LEGACY_SETTINGS_KEY);
+    if (!stored) return defaultPersonalSettings;
+    const parsed = JSON.parse(stored) as Partial<PersonalSettings>;
+    const whatsappMessage = parsed.whatsappMessage ?? parsed.whatsappMessageTemplate ?? defaultPersonalSettings.whatsappMessage;
+    return {
+      ...defaultPersonalSettings,
+      ...parsed,
+      whatsappMessage,
+      whatsappMessageTemplate: parsed.whatsappMessageTemplate ?? whatsappMessage
+    } as PersonalSettings;
+  } catch {
+    return defaultPersonalSettings;
+  }
+}
+
+export function savePersonalSettings(settings: PersonalSettings) {
+  const nextSettings = {
+    ...defaultPersonalSettings,
+    ...settings,
+    whatsappMessageTemplate: settings.whatsappMessageTemplate || settings.whatsappMessage
+  };
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+}
 
 export function loadData(): AppData {
   const stored = localStorage.getItem(DATA_KEY);
   if (!stored) {
     saveData(seedData);
-    return seedData;
+    return { ...seedData, personalSettings: loadPersonalSettings() };
   }
   const parsed = JSON.parse(stored) as Partial<AppData>;
-  return { ...seedData, ...parsed, workoutLogs: parsed.workoutLogs ?? [] } as AppData;
+  return { ...seedData, ...parsed, workoutLogs: parsed.workoutLogs ?? [], personalSettings: parsed.personalSettings ?? loadPersonalSettings() } as AppData;
 }
 
 export function saveData(data: AppData) {

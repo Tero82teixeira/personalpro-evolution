@@ -1,5 +1,5 @@
 import type { AppData, Anamnesis, CheckIn, Exercise, MarketingIdea, MessageTemplate, Payment, Periodization, PhysicalAssessment, Student, User, Workout, WorkoutLog } from '../types';
-import { loadData } from './storage';
+import { loadData, loadPersonalSettings } from './storage';
 import { requireSupabase } from './supabase/client';
 import { isSupabaseConfigured } from './supabase/config';
 
@@ -276,6 +276,7 @@ export async function loadAppData(currentUser?: User | null): Promise<AppData> {
       category: item.category,
       title: item.title,
       content: item.content
-    }))
+    })),
+    personalSettings: loadPersonalSettings()
   };
 }

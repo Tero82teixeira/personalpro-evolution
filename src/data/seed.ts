@@ -1,4 +1,5 @@
 import type { AppData } from '../types';
+import { defaultPersonalSettings } from './defaultSettings';
 
 export const seedData: AppData = {
   users: [],
@@ -11,5 +12,6 @@ export const seedData: AppData = {
   checkIns: [],
   payments: [],
   messages: [],
-  marketingIdeas: []
+  marketingIdeas: [],
+  personalSettings: defaultPersonalSettings
 };

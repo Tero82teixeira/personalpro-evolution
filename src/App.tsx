@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
-import { loadData, saveData, loadSession, makeId } from './services/storage';
+import { defaultPersonalSettings, loadData, saveData, loadSession, makeId, savePersonalSettings } from './services/storage';
 import { isSupabaseConfigured } from './services/supabase/config';
 import { authService } from './services/auth';
 import { loadAppData } from './services/appData';
@@ -35,7 +35,7 @@ import {
   saveWorkoutRemote
 } from './services/remoteActions';
 import { calculateImc, daysUntil, formatCurrency, formatDate, latestAssessment, studentInitials } from './utils/metrics';
-import type { Anamnesis, AppData, CheckIn, Exercise, MarketingIdea, MessageTemplate, Payment, Periodization, PeriodizationPhase, PhysicalAssessment, Student, User, Workout, WorkoutLog } from './types';
+import type { Anamnesis, AppData, CheckIn, Exercise, MarketingIdea, MessageTemplate, Payment, Periodization, PeriodizationPhase, PersonalSettings, PhysicalAssessment, Student, User, Workout, WorkoutLog } from './types';
 
 type IconProps = { size?: number; className?: string };
 type IconComponent = (props: IconProps) => React.JSX.Element;
@@ -93,6 +93,7 @@ const Megaphone = makeIcon('M');
 const MessageCircle = makeIcon('@');
 const Plus = makeIcon('+');
 const ShieldCheck = makeIcon('P');
+const SettingsIcon = makeIcon('⚙');
 const Sparkles = makeIcon('*');
 const UserRound = makeIcon('U');
 const Users = makeIcon('G');
@@ -111,13 +112,13 @@ type AdminTab =
   | 'evolution'
   | 'finance'
   | 'messages'
-  | 'marketing';
+  | 'marketing'
+  | 'settings';
 type StudentTab = 'home' | 'workout' | 'journey' | 'evolution' | 'checkin' | 'profile';
-const personalName = 'Ronaldo';
-const personalWhatsAppNumber = '5528999410462';
 
 const adminTabs: { id: AdminTab; label: string; icon: IconComponent }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
+  { id: 'settings', label: 'Configurações', icon: SettingsIcon },
   { id: 'students', label: 'Alunos', icon: Users },
   { id: 'assessments', label: 'Avaliação', icon: Activity },
   { id: 'anamnesis', label: 'Anamnese', icon: ShieldCheck },
@@ -209,6 +210,19 @@ async function copyTextToClipboard(text: string) {
   element.select();
   document.execCommand('copy');
   document.body.removeChild(element);
+}
+
+function applyPersonalTemplate(
+  template: string,
+  variables: { personalName: string; studentName: string; brandName: string }
+) {
+  return template
+    .split('{personalName}')
+    .join(variables.personalName)
+    .split('{studentName}')
+    .join(variables.studentName)
+    .split('{brandName}')
+    .join(variables.brandName);
 }
 
 function formatDateTimeParts(value?: string) {
@@ -423,7 +437,8 @@ const emptyAppData: AppData = {
   checkIns: [],
   payments: [],
   messages: [],
-  marketingIdeas: []
+  marketingIdeas: [],
+  personalSettings: defaultPersonalSettings
 };
 
 function App() {
@@ -547,6 +562,7 @@ function App() {
         setSessionId(null);
       }}
       toast={toast}
+      settings={data.personalSettings}
     >
       {user.role === 'admin' ? (
         <AdminArea user={user} data={data} commit={commit} />
@@ -649,7 +665,7 @@ function AuthScreen({
   );
 }
 
-function Shell({ user, onLogout, toast, children }: { user: User; onLogout: () => void; toast: string; children: React.ReactNode }) {
+function Shell({ user, onLogout, toast, settings, children }: { user: User; onLogout: () => void; toast: string; settings: PersonalSettings; children: React.ReactNode }) {
   return (
     <main className="min-h-screen bg-ink text-white">
       <header className="sticky top-0 z-30 border-b border-line bg-ink/90 px-4 py-3 backdrop-blur md:px-6">
@@ -657,8 +673,8 @@ function Shell({ user, onLogout, toast, children }: { user: User; onLogout: () =
           <div className="flex min-w-0 items-center gap-3">
             <Logo />
             <div className="min-w-0">
-              <p className="truncate font-bold">PersonalPro Evolution</p>
-              <p className="truncate text-xs text-slate-400">{user.role === 'admin' ? 'Área do Personal' : 'Área do Aluno'}</p>
+              <p className="truncate font-bold">{settings.brandName || defaultPersonalSettings.brandName}</p>
+              <p className="truncate text-xs text-slate-400">{user.role === 'admin' ? 'Área do Personal' : settings.slogan || 'Área do Aluno'}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -727,6 +743,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
         {tab === 'finance' && <FinanceView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'messages' && <MessagesView data={data} />}
         {tab === 'marketing' && <MarketingView data={data} />}
+        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} />}
         {tab !== 'dashboard' && data.students.length === 0 && ['assessments', 'anamnesis', 'workouts', 'periodization', 'journey', 'evolution'].includes(tab) && (
           <Empty title="Base limpa" text="Cadastre um aluno para usar este módulo." />
         )}
@@ -743,19 +760,28 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
     scrollToTop();
   };
   if (!student) return <Empty title="Perfil não encontrado" text="Entre em contato com o personal." />;
-  const openPersonalWhatsApp = () => {
+  const buildPersonalWhatsAppUrl = () => {
+    const settings = data.personalSettings ?? defaultPersonalSettings;
     const studentNameForMessage = studentDisplayName(student) || 'aluno';
-    const messages: Record<StudentTab, string> = {
-      home: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre meu acompanhamento no PersonalPro Evolution.`,
-      workout: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre meu treino de hoje.`,
-      journey: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre minha jornada/evolução.`,
-      evolution: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre minha evolução.`,
-      checkin: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre meu check-in.`,
-      profile: `Olá, professor ${personalName}. Aqui é ${studentNameForMessage}. Tenho uma dúvida sobre meu acompanhamento no PersonalPro Evolution.`
-    };
-    const url = `https://wa.me/${personalWhatsAppNumber}?text=${encodeURIComponent(messages[tab])}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const personalName = settings.personalName || defaultPersonalSettings.personalName;
+    const brandName = settings.brandName || defaultPersonalSettings.brandName;
+    const baseTemplate =
+      settings.whatsappMessage ||
+      settings.whatsappMessageTemplate ||
+      defaultPersonalSettings.whatsappMessage;
+    const applyTemplate = (template: string) =>
+      applyPersonalTemplate(template, {
+        personalName,
+        studentName: studentNameForMessage,
+        brandName
+      });
+    const message = applyTemplate(baseTemplate);
+    const configuredPhone = String(settings.personalWhatsApp || '').replace(/\D/g, '');
+    const fallbackPhone = String(defaultPersonalSettings.personalWhatsApp).replace(/\D/g, '');
+    const phone = configuredPhone || fallbackPhone;
+    return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
   };
+  const whatsappUrl = buildPersonalWhatsAppUrl();
 
   return (
     <div className="mx-auto max-w-4xl px-3 pb-32 pt-4 sm:px-4 md:pb-24 md:pt-5">
@@ -769,15 +795,17 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
       {tab === 'evolution' && <EvolutionView data={data} student={student} compact />}
       {tab === 'checkin' && <StudentCheckin data={data} student={student} commit={commit} />}
       {tab === 'profile' && <StudentProfile data={data} student={student} commit={commit} />}
-      <button
-        type="button"
+      <a
+        href={whatsappUrl}
+        target="_blank"
+        rel="noopener noreferrer"
         className="student-whatsapp-button"
-        onClick={openPersonalWhatsApp}
         aria-label="Falar com o Personal pelo WhatsApp"
+        title={whatsappUrl}
       >
         <span aria-hidden="true">💬</span>
         <span>Falar com o Personal</span>
-      </button>
+      </a>
       <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-line bg-ink/95 px-2 py-2 backdrop-blur">
         <div className="mx-auto grid max-w-4xl grid-cols-6 gap-1">
           {studentTabs.map((item) => (
@@ -2227,6 +2255,99 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
           </Panel>
         ))}
       </div>
+    </Stack>
+  );
+}
+
+function PersonalSettingsView({ data, commit }: { data: AppData; commit: (data: AppData, message?: string) => void }) {
+  const rawSettings = data.personalSettings ?? defaultPersonalSettings;
+  const currentSettings = {
+    ...defaultPersonalSettings,
+    ...rawSettings,
+    whatsappMessage: rawSettings.whatsappMessage || rawSettings.whatsappMessageTemplate || defaultPersonalSettings.whatsappMessage,
+    whatsappMessageTemplate: rawSettings.whatsappMessageTemplate || rawSettings.whatsappMessage || defaultPersonalSettings.whatsappMessageTemplate
+  };
+  const [form, setForm] = useState<PersonalSettings>(currentSettings);
+  const [isEditing, setIsEditing] = useState(false);
+
+  useEffect(() => {
+    const nextSettings = {
+      ...defaultPersonalSettings,
+      ...(data.personalSettings ?? {}),
+      whatsappMessage:
+        data.personalSettings?.whatsappMessage ||
+        data.personalSettings?.whatsappMessageTemplate ||
+        defaultPersonalSettings.whatsappMessage,
+      whatsappMessageTemplate:
+        data.personalSettings?.whatsappMessageTemplate ||
+        data.personalSettings?.whatsappMessage ||
+        defaultPersonalSettings.whatsappMessageTemplate
+    };
+    setForm(nextSettings);
+    setIsEditing(false);
+  }, [data.personalSettings]);
+
+  const cancel = () => {
+    setForm(currentSettings);
+    setIsEditing(false);
+  };
+
+  const saveSettings = () => {
+    const nextSettings = {
+      ...defaultPersonalSettings,
+      ...form,
+      whatsappMessageTemplate: form.whatsappMessageTemplate || form.whatsappMessage
+    };
+    savePersonalSettings(nextSettings);
+    commit({ ...data, personalSettings: nextSettings }, 'Configurações atualizadas com sucesso.');
+    setIsEditing(false);
+  };
+
+  return (
+    <Stack>
+      <PageTitle title="⚙️ Configurações do Personal" subtitle="Personalize seus dados profissionais e informações de contato." />
+      <Panel title="Dados do Personal">
+        <p className={`mb-4 rounded-md border px-3 py-2 text-sm font-semibold ${isEditing ? 'border-fitblue/30 bg-fitblue/10 text-fitblue' : 'border-line bg-ink/40 text-slate-300'}`}>
+          {isEditing ? 'Modo edição ativo.' : 'Modo visualização. Clique em Editar configurações para alterar os dados.'}
+        </p>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Input label="Nome do personal" value={form.personalName} onChange={(value) => setForm({ ...form, personalName: value })} disabled={!isEditing} />
+          <Input label="WhatsApp do personal" value={form.personalWhatsApp} onChange={(value) => setForm({ ...form, personalWhatsApp: value })} disabled={!isEditing} />
+          <Input label="Instagram" value={form.instagram} onChange={(value) => setForm({ ...form, instagram: value })} disabled={!isEditing} />
+          <Input label="Nome da marca" value={form.brandName} onChange={(value) => setForm({ ...form, brandName: value })} disabled={!isEditing} />
+          <Input label="E-mail profissional" type="email" value={form.professionalEmail} onChange={(value) => setForm({ ...form, professionalEmail: value })} disabled={!isEditing} />
+          <Input label="Cidade/atendimento" value={form.serviceCity} onChange={(value) => setForm({ ...form, serviceCity: value })} disabled={!isEditing} />
+          <Textarea label="Slogan" value={form.slogan} onChange={(value) => setForm({ ...form, slogan: value })} disabled={!isEditing} />
+          <Textarea label="Mensagem padrão do WhatsApp" value={form.whatsappMessage} onChange={(value) => setForm({ ...form, whatsappMessage: value, whatsappMessageTemplate: value })} disabled={!isEditing} />
+          <div className="md:col-span-2">
+            <Textarea label="Observações" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} disabled={!isEditing} />
+          </div>
+        </div>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          {isEditing ? (
+            <>
+              <button className="btn-primary w-full sm:w-auto" onClick={saveSettings}>Salvar alterações</button>
+              <button className="btn-secondary w-full sm:w-auto" onClick={cancel}>Cancelar</button>
+            </>
+          ) : (
+            <button className="btn-secondary w-full sm:w-auto" onClick={() => setIsEditing(true)}>Editar configurações</button>
+          )}
+        </div>
+      </Panel>
+      <Panel title="Prévia de contato">
+        <div className="grid gap-3 md:grid-cols-3">
+          <InfoBox label="Personal" value={currentSettings.personalName} />
+          <InfoBox label="WhatsApp" value={currentSettings.personalWhatsApp} />
+          <InfoBox label="Marca" value={currentSettings.brandName} />
+        </div>
+        <p className="mt-4 rounded-md border border-line bg-ink/40 p-3 text-sm leading-6 text-slate-300">
+          {applyPersonalTemplate(currentSettings.whatsappMessage, {
+            personalName: currentSettings.personalName,
+            studentName: 'Aluno Teste',
+            brandName: currentSettings.brandName
+          })}
+        </p>
+      </Panel>
     </Stack>
   );
 }

@@ -44,8 +44,10 @@
     position: fixed !important;
     right: 0.75rem !important;
     bottom: 88px !important;
-    z-index: 80 !important;
+    z-index: 90 !important;
     display: inline-flex !important;
+    pointer-events: auto !important;
+    touch-action: manipulation;
     min-height: 48px;
     align-items: center;
     justify-content: center;
