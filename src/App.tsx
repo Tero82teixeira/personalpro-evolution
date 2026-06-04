@@ -1472,6 +1472,7 @@ function AdminDashboard({
           />
         </div>
       </Panel>
+
     </Stack>
     </div>
   );
@@ -4084,9 +4085,9 @@ function PageTitle({ title, subtitle }: { title: string; subtitle: string }) {
 
 function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-lg border border-line bg-panel p-2.5 shadow-[0_10px_30px_rgba(0,0,0,.18)] sm:p-4">
+    <section className="overflow-hidden rounded-2xl border border-fitblue/25 bg-panel/80 p-3 shadow-[0_20px_50px_rgba(0,0,0,.34)] sm:p-5">
       <div className="mb-3 flex flex-col gap-2 sm:mb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-        <h2 className="text-sm font-bold leading-tight sm:text-base">{title}</h2>
+        <h2 className="text-base font-black leading-tight text-white sm:text-lg">{title}</h2>
         {action}
       </div>
       {children}
@@ -4097,21 +4098,21 @@ function Panel({ title, action, children }: { title: string; action?: React.Reac
 function StatCard({ label, value, icon: Icon, accent }: { label: string; value: string | number; icon: IconComponent; accent: 'blue' | 'orange' | 'green' }) {
   const color = accent === 'blue' ? 'text-fitblue' : accent === 'orange' ? 'text-fitorange' : 'text-fitgreen';
   return (
-    <div className="rounded-lg border border-line bg-[linear-gradient(135deg,rgba(13,23,38,.98),rgba(10,29,38,.82))] p-3 shadow-[0_12px_34px_rgba(0,0,0,.18)] sm:p-4">
+    <div className="rounded-2xl border border-fitblue/25 bg-[linear-gradient(135deg,rgba(15,23,42,.84),rgba(8,47,73,.42))] p-4 shadow-[0_18px_48px_rgba(0,0,0,.32)] sm:p-5">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-xs leading-snug text-slate-400 sm:text-sm">{label}</p>
-        <div className="grid h-8 w-8 place-items-center rounded-md border border-white/10 bg-white/5 sm:h-9 sm:w-9">
-          <Icon className={color} size={20} />
+        <p className="text-sm font-bold leading-snug text-slate-300 sm:text-base">{label}</p>
+        <div className="grid h-10 w-10 place-items-center rounded-xl border border-fitblue/25 bg-fitblue/10 shadow-[0_0_26px_rgba(58,183,255,.16)] sm:h-11 sm:w-11">
+          <Icon className={color} size={22} />
         </div>
       </div>
-      <p className="mt-2 truncate text-xl font-black sm:mt-3 sm:text-2xl">{value}</p>
+      <p className="mt-3 truncate text-3xl font-black text-white sm:text-4xl">{value}</p>
     </div>
   );
 }
 
 function NavButton({ active, icon: Icon, label, onClick }: { active: boolean; icon: IconComponent; label: string; onClick: () => void }) {
   return (
-    <button className={`flex min-w-max items-center gap-3 rounded-md px-3 py-2 text-sm transition md:mb-1 md:w-full ${active ? 'bg-fitblue text-ink' : 'text-slate-300 hover:bg-white/5'}`} onClick={onClick}>
+    <button className={`flex min-w-max items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold transition md:mb-1 md:w-full ${active ? 'bg-[linear-gradient(135deg,#38bdf8,#35e68c)] text-ink shadow-[0_12px_28px_rgba(56,189,248,.24)]' : 'text-slate-300 hover:bg-fitblue/10 hover:text-white'}`} onClick={onClick}>
       <Icon size={18} />
       <span>{label}</span>
     </button>
@@ -4120,7 +4121,7 @@ function NavButton({ active, icon: Icon, label, onClick }: { active: boolean; ic
 
 function MobileTab({ active, icon: Icon, label, onClick }: { active: boolean; icon: IconComponent; label: string; onClick: () => void }) {
   return (
-    <button className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-md px-1 py-2 text-[10px] sm:text-[11px] ${active ? 'bg-fitgreen text-ink' : 'text-slate-400'}`} onClick={onClick}>
+    <button className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[10px] font-bold sm:text-[11px] ${active ? 'bg-[linear-gradient(135deg,#38bdf8,#35e68c)] text-ink shadow-[0_8px_22px_rgba(53,230,140,.22)]' : 'text-slate-400'}`} onClick={onClick}>
       <Icon size={18} />
       <span className="truncate">{label}</span>
     </button>
@@ -4196,9 +4197,9 @@ function ImageUpload({ label, value, onChange, multiple = false, disabled = fals
 
 function InfoBox({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-md border border-line bg-ink/40 p-2.5 sm:p-3">
-      <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500 sm:text-xs sm:tracking-[0.14em]">{label}</p>
-      <p className="mt-1 break-words text-xs text-slate-200 sm:text-sm">{value || '-'}</p>
+    <div className="rounded-xl border border-fitblue/20 bg-ink/50 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.05)] sm:p-4">
+      <p className="text-[11px] font-black uppercase tracking-[0.12em] text-fitblue sm:text-xs sm:tracking-[0.14em]">{label}</p>
+      <p className="mt-1.5 break-words text-sm font-bold text-slate-100 sm:text-base">{value || '-'}</p>
     </div>
   );
 }
@@ -4225,7 +4226,7 @@ function Row({ title, meta, badge }: { title: string; meta: string; badge: strin
 
 function Badge({ label }: { label: string }) {
   const display = label === 'concluido' ? 'Concluído' : label === 'ativo' ? 'Ativo' : label === 'pendente' ? 'Pendente' : label === 'atrasado' ? 'Atrasado' : label === 'pago' ? 'Pago' : label;
-  return <span className="rounded-full border border-fitblue/30 bg-fitblue/10 px-2.5 py-1 text-xs font-semibold text-fitblue">{display}</span>;
+  return <span className="rounded-full border border-fitblue/40 bg-fitblue/15 px-3 py-1.5 text-xs font-black text-fitblue shadow-[0_0_20px_rgba(58,183,255,.12)]">{display}</span>;
 }
 
 function DashboardAlertList({
