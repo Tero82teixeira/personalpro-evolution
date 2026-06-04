@@ -434,6 +434,66 @@ interface IntelligentAnalysisResult {
   metrics: { label: string; value: string | number }[];
 }
 
+interface StudentSmartReport {
+  student: Student;
+  reportDate: string;
+  executiveSummary: string;
+  bodyEvolution: {
+    initialWeight: number;
+    currentWeight: number;
+    weightDiff: number;
+    initialBodyFat: number;
+    currentBodyFat: number;
+    bodyFatDiff: number;
+    lastAssessment: string;
+  };
+  trainingConsistency: {
+    totalWorkouts: number;
+    monthWorkouts: number;
+    latestWorkout: string;
+    daysWithoutTraining: string | number;
+    adherence: number;
+  };
+  checkinBehavior: {
+    latestCheckIn: string;
+    currentWeight: string | number;
+    motivation: string | number;
+    stress: string | number;
+    sleep: string;
+    food: string;
+    difficulty: string;
+    victory: string;
+  };
+  hydration: {
+    goal: number;
+    consumed: number;
+    progress: number;
+    status: string;
+  };
+  journey: {
+    day: number;
+    phase: string;
+    score: number;
+    activeAchievements: number;
+  };
+  periodization: {
+    active: string;
+    duration: string;
+    status: string;
+  };
+  financial: {
+    status: string;
+    dueDate: string;
+    summary: string;
+  };
+  positives: string[];
+  attentionPoints: string[];
+  abandonmentRisk: IntelligentRisk;
+  abandonmentRiskBadge: string;
+  riskExplanation: string;
+  nextAction: string;
+}
+
 function buildIntelligentAnalysis(
   data: AppData,
   student?: Student,
@@ -586,6 +646,135 @@ function buildIntelligentAnalysis(
       { label: 'Check-ins', value: checkIns.length },
       { label: 'Motivação', value: motivation ? `${motivation}/10` : 'Sem registro' }
     ]
+  };
+}
+
+function buildStudentSmartReport(
+  studentId: string,
+  data: AppData,
+  waterRecords: { studentId: string; date: string; waterGoal: number; waterConsumed: number }[] = []
+): StudentSmartReport | null {
+  const student = data.students.find((item) => item.id === studentId);
+  if (!student) return null;
+
+  const analysis = buildIntelligentAnalysis(data, student, waterRecords, 'admin');
+  const evolution = getStudentEvolutionSummary(student, data.assessments);
+  const workoutLogs = workoutLogsForStudent(data, student.id);
+  const latestWorkoutLog = workoutLogs[0];
+  const latestWorkoutCompletedAt = latestWorkoutLog ? getWorkoutLogCompletedAt(latestWorkoutLog) : '';
+  const latestWorkoutDateTime = formatDateTimeParts(latestWorkoutCompletedAt);
+  const checkIns = data.checkIns
+    .filter((item) => item.studentId === student.id)
+    .sort((a, b) => getCheckInDateValue(b).localeCompare(getCheckInDateValue(a)));
+  const latestCheckIn = checkIns[0];
+  const latestCheckInDate = latestCheckIn ? getCheckInDateValue(latestCheckIn) : '';
+  const todayWater = getWaterRecord(waterRecords, student.id);
+  const waterProgress = Math.min(100, Math.round((todayWater.waterConsumed / todayWater.waterGoal) * 100));
+  const activePeriodization = data.periodizations.find((item) => item.studentId === student.id && item.status === 'ativo');
+  const payments = data.payments.filter((payment) => payment.studentId === student.id);
+  const financialStatus = payments.find((payment) => payment.status === 'atrasado') ?? payments.find((payment) => payment.status === 'pendente') ?? payments[0];
+  const startSource =
+    dateKey(student.startDate) ||
+    dateKey(String(recordField(student, ['createdAt', 'created_at']) ?? '')) ||
+    (evolution.firstAssessment ? dateKey(getAssessmentDateValue(evolution.firstAssessment)) : '') ||
+    dateKey(latestWorkoutCompletedAt) ||
+    dateKey(latestCheckInDate);
+  const startDate = startSource ? new Date(`${startSource}T00:00:00`) : undefined;
+  const rawJourneyDay = startDate && !Number.isNaN(startDate.getTime()) ? Math.floor((Date.now() - startDate.getTime()) / 86400000) + 1 : 1;
+  const journeyDay = Math.min(90, Math.max(1, rawJourneyDay));
+  const completedWorkoutsCount = workoutLogs.length;
+  const journeyScore = Math.min(100,
+    (evolution.assessmentCount > 0 ? 30 : 0) +
+    (completedWorkoutsCount > 0 ? 25 : 0) +
+    (checkIns.length > 0 ? 20 : 0) +
+    (activePeriodization ? 15 : 0) +
+    (completedWorkoutsCount >= 5 ? 10 : 0) +
+    (todayWater.waterConsumed >= todayWater.waterGoal ? 10 : 0)
+  );
+  const journeyPhase = journeyScore <= 30 ? 'Início' : journeyScore <= 60 ? 'Em evolução' : journeyScore <= 80 ? 'Consistente' : 'Transformação';
+  const bodyFatDiff = Number((evolution.currentBodyFat - evolution.initialBodyFat).toFixed(1));
+  const weightDiff = Number((evolution.currentWeight - evolution.initialWeight).toFixed(1));
+  const positives = [
+    evolution.assessmentCount ? 'Avaliação física registrada' : '',
+    checkIns.length ? 'Check-in respondido' : '',
+    activePeriodization ? 'Periodização ativa' : '',
+    workoutLogs.length ? 'Treino concluído registrado' : '',
+    todayWater.waterConsumed >= todayWater.waterGoal ? 'Meta de água batida hoje' : ''
+  ].filter(Boolean);
+  const attentionPoints = [
+    !evolution.assessmentCount ? 'Sem avaliação física registrada' : '',
+    !latestCheckIn || Number(daysSince(latestCheckInDate)) > 10 ? 'Check-in pendente ou antigo' : '',
+    !latestWorkoutLog || Number(daysSince(latestWorkoutCompletedAt)) > 7 ? 'Baixa frequência recente de treinos' : '',
+    todayWater.waterConsumed < todayWater.waterGoal ? 'Hidratação abaixo da meta diária' : '',
+    financialStatus && financialStatus.status !== 'pago' ? `Financeiro ${financialStatus.status}` : ''
+  ].filter(Boolean);
+  const hasEnoughData = Boolean(evolution.assessmentCount && workoutLogs.length && checkIns.length);
+
+  return {
+    student,
+    reportDate: formatDate(new Date().toISOString()),
+    executiveSummary: hasEnoughData
+      ? `O aluno apresenta acompanhamento ativo, com ${evolution.assessmentCount ? 'avaliação física registrada' : 'avaliação pendente'} e ${checkIns.length ? 'check-ins disponíveis' : 'check-in pendente'}. A próxima ação recomendada é ${analysis.recommendedAction.toLowerCase()}`
+      : 'Dados insuficientes para gerar um relatório completo. Registre avaliação, treino e check-in para uma análise mais precisa.',
+    bodyEvolution: {
+      initialWeight: evolution.initialWeight,
+      currentWeight: evolution.currentWeight,
+      weightDiff,
+      initialBodyFat: evolution.initialBodyFat,
+      currentBodyFat: evolution.currentBodyFat,
+      bodyFatDiff,
+      lastAssessment: evolution.lastAssessment ? formatDate(getAssessmentDateValue(evolution.lastAssessment)) : 'Sem registro'
+    },
+    trainingConsistency: {
+      totalWorkouts: workoutLogs.length,
+      monthWorkouts: monthWorkoutCount(workoutLogs),
+      latestWorkout: latestWorkoutLog ? `${workoutName(data, latestWorkoutLog.workoutId)} - ${latestWorkoutDateTime.date}` : 'Sem registro',
+      daysWithoutTraining: latestWorkoutLog ? daysSince(latestWorkoutCompletedAt) : 'Sem treino',
+      adherence: planAdherence(data, student, workoutLogs)
+    },
+    checkinBehavior: {
+      latestCheckIn: latestCheckIn ? formatDate(latestCheckInDate) : 'Sem registro',
+      currentWeight: latestCheckIn?.currentWeight ?? 'Sem registro',
+      motivation: latestCheckIn?.motivation ? `${latestCheckIn.motivation}/10` : 'Sem registro',
+      stress: latestCheckIn?.stress ? `${latestCheckIn.stress}/10` : 'Sem registro',
+      sleep: latestCheckIn?.sleep || 'Sem registro',
+      food: latestCheckIn?.food || 'Sem registro',
+      difficulty: latestCheckIn?.difficulty || 'Sem registro',
+      victory: latestCheckIn?.victory || 'Sem registro'
+    },
+    hydration: {
+      goal: todayWater.waterGoal,
+      consumed: todayWater.waterConsumed,
+      progress: waterProgress,
+      status: todayWater.waterConsumed >= todayWater.waterGoal ? 'Meta batida' : 'Pendente'
+    },
+    journey: {
+      day: journeyDay,
+      phase: journeyPhase,
+      score: journeyScore,
+      activeAchievements: positives.length
+    },
+    periodization: {
+      active: activePeriodization ? 'Sim' : 'Não',
+      duration: activePeriodization ? `${activePeriodization.weeks} semanas` : 'Sem periodização ativa',
+      status: activePeriodization?.status ?? 'Sem registro'
+    },
+    financial: {
+      status: financialStatus?.status ?? 'Sem registro',
+      dueDate: financialStatus ? formatDate(financialStatus.dueDate) : 'Sem registro',
+      summary: financialStatus ? `${financialStatus.status} - ${formatCurrency(financialStatus.amount)}` : 'Sem pagamentos registrados'
+    },
+    positives: positives.length ? positives : ['Cadastro do aluno disponível'],
+    attentionPoints: attentionPoints.length ? attentionPoints : ['Nenhum ponto crítico encontrado agora'],
+    abandonmentRisk: analysis.risk,
+    abandonmentRiskBadge: analysis.riskBadge,
+    riskExplanation:
+      analysis.risk === 'Alto'
+        ? 'Risco alto por ausência de sinais recentes de treino, check-in ou avaliação.'
+        : analysis.risk === 'Médio'
+          ? 'Risco médio porque há sinais que merecem acompanhamento, como check-ins pendentes ou baixa frequência recente.'
+          : 'Risco baixo porque há registros recentes suficientes para acompanhamento.',
+    nextAction: analysis.recommendedAction
   };
 }
 
@@ -995,6 +1184,7 @@ function AdminDashboard({
 }) {
   const [showStudentSummary, setShowStudentSummary] = useState(false);
   const [showWorkoutHistory, setShowWorkoutHistory] = useState(false);
+  const [showSmartReport, setShowSmartReport] = useState(false);
   const [workoutHistoryFilter, setWorkoutHistoryFilter] = useState<'today' | 'week' | 'month' | 'date' | ''>('');
   const [workoutHistoryDate, setWorkoutHistoryDate] = useState('');
   const studentsWithCheckIn = new Set(data.checkIns.map((item) => item.studentId));
@@ -1025,6 +1215,8 @@ function AdminDashboard({
   const selectedPayments = selectedStudentId ? data.payments.filter((payment) => payment.studentId === selectedStudentId) : [];
   const selectedPeriodization = selectedStudentId ? data.periodizations.find((periodization) => periodization.studentId === selectedStudentId && periodization.status === 'ativo') : undefined;
   const evolutionSummary = currentStudent ? getStudentEvolutionSummary(currentStudent, data.assessments) : undefined;
+  const smartReportWaterRecords = loadWaterRecords();
+  const smartReport = currentStudent ? buildStudentSmartReport(currentStudent.id, data, smartReportWaterRecords) : null;
   const selectedAssessments = evolutionSummary?.assessments ?? [];
   const selectedFinancialStatus = selectedPayments.find((payment) => payment.status === 'atrasado') ?? selectedPayments.find((payment) => payment.status === 'pendente') ?? selectedPayments[0];
   const hasDashboardWeightData = Boolean(evolutionSummary && (evolutionSummary.initialWeight || evolutionSummary.currentWeight || evolutionSummary.assessmentCount));
@@ -1060,9 +1252,9 @@ function AdminDashboard({
   const selectedHasWorkout = selectedWorkoutLogs.length > 0;
   const selectedMissingSignals = [!selectedHasAssessment, !selectedHasRecentCheckIn, !selectedHasWorkout].filter(Boolean).length;
   const selectedAbandonmentRisk = selectedMissingSignals >= 3 ? '🔴 Alto' : selectedMissingSignals >= 1 ? '🟡 Médio' : '🟢 Baixo';
-  const selectedStudentPhone = String(currentStudent?.phone || '').replace(/\D/g, '');
+  const selectedStudentPhone = getStudentContactPhone(currentStudent);
   const selectedStudentWhatsAppUrl = selectedStudentPhone
-    ? `https://wa.me/${selectedStudentPhone}?text=${encodeURIComponent(`Olá, ${currentStudent ? studentDisplayName(currentStudent) : 'aluno'}! Passando para acompanhar sua evolução no PersonalPro Evolution.`)}`
+    ? `https://wa.me/${selectedStudentPhone}?text=${encodeURIComponent(`Olá, ${currentStudent ? studentDisplayName(currentStudent) : 'aluno'}! Analisei sua evolução no PersonalPro Evolution e quero alinhar alguns pontos com você para a próxima semana.`)}`
     : '';
   const inactiveWorkoutAlerts = data.students
     .map((student) => {
@@ -1074,6 +1266,7 @@ function AdminDashboard({
   useEffect(() => {
     setShowStudentSummary(false);
     setShowWorkoutHistory(false);
+    setShowSmartReport(false);
     setWorkoutHistoryFilter('');
     setWorkoutHistoryDate('');
   }, [selectedStudentId]);
@@ -1106,6 +1299,59 @@ function AdminDashboard({
             <button className="btn-secondary w-full sm:w-auto" onClick={() => setShowStudentSummary(!showStudentSummary)}>
               {showStudentSummary ? 'Ocultar resumo' : 'Ver resumo do aluno'}
             </button>
+
+            <Panel title="🤖 Análise Inteligente do Aluno">
+              <div className="rounded-xl border border-fitblue/40 bg-[linear-gradient(135deg,rgba(56,189,248,.14),rgba(34,197,94,.08),rgba(13,23,38,.94))] p-4 shadow-[0_18px_44px_rgba(14,165,233,0.14)]">
+                <p className="text-sm font-semibold text-slate-300">Leitura automática dos dados recentes do aluno selecionado.</p>
+                <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_.9fr]">
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-3">
+                      <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Status geral</p>
+                      <p className="mt-2 text-base font-semibold text-white">Aluno em acompanhamento ativo.</p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-ink/45 p-3">
+                      <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Risco de abandono</p>
+                      <p className="mt-2 text-2xl font-black text-white">{selectedAbandonmentRisk}</p>
+                    </div>
+                    <div className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3">
+                      <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Próxima ação recomendada</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-100">Enviar mensagem de incentivo e reforçar a meta da semana.</p>
+                      {selectedStudentWhatsAppUrl ? (
+                        <a className="btn-secondary mt-3 w-full sm:w-auto" href={selectedStudentWhatsAppUrl} target="_blank" rel="noopener noreferrer">
+                          💬 Enviar mensagem para o aluno
+                        </a>
+                      ) : (
+                        <p className="mt-3 rounded-md border border-line bg-ink/50 px-3 py-2 text-sm font-semibold text-slate-300">Telefone do aluno não cadastrado</p>
+                      )}
+                      <button className="btn-primary mt-3 w-full sm:w-auto" onClick={() => setShowSmartReport(!showSmartReport)}>
+                        {showSmartReport ? 'Ocultar relatório inteligente' : '📊 Ver relatório inteligente'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-1">
+                    <div className="rounded-lg border border-fitgreen/25 bg-fitgreen/10 p-3">
+                      <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Pontos positivos</p>
+                      <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
+                        <p>{selectedHasAssessment ? '✅ Avaliação física registrada' : '✅ Cadastro do aluno disponível'}</p>
+                        <p>{selectedHasRecentCheckIn ? '✅ Check-in respondido recentemente' : '✅ Acompanhamento pronto para receber check-ins'}</p>
+                        <p>{selectedPeriodization ? '✅ Periodização ativa' : '✅ Plano pode ser estruturado por periodização'}</p>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-fitorange/25 bg-fitorange/10 p-3">
+                      <p className="text-xs font-black uppercase tracking-[0.14em] text-fitorange">Pontos de atenção</p>
+                      <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
+                        <p>{selectedHasWorkout ? '⚠️ Verificar frequência de treino' : '⚠️ Nenhum treino concluído registrado'}</p>
+                        <p>{selectedHasRecentCheckIn ? '⚠️ Acompanhar hidratação' : '⚠️ Aluno está sem check-in recente'}</p>
+                        {!selectedHasAssessment && <p>⚠️ Aluno ainda não possui avaliação física registrada.</p>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Panel>
+
+            {showSmartReport && smartReport && <StudentSmartReportPanel report={smartReport} />}
+
             {showStudentSummary && (
               <Stack>
                 {!hasSelectedStudentData && <Empty title="Este aluno ainda não possui dados suficientes." text="Registre treinos, check-ins, pagamentos ou periodização para enriquecer o resumo." />}
@@ -1126,53 +1372,6 @@ function AdminDashboard({
                   <InfoBox label="Status financeiro" value={selectedFinancialStatus ? `${selectedFinancialStatus.status} - ${formatDate(selectedFinancialStatus.dueDate)}` : 'Sem registro'} />
                   <InfoBox label="Periodização ativa" value={selectedPeriodization ? `${selectedPeriodization.weeks} semanas` : 'Sem periodização ativa'} />
                 </div>
-
-                <Panel title="🤖 Análise Inteligente do Aluno">
-                  <div className="rounded-xl border border-fitblue/40 bg-[linear-gradient(135deg,rgba(56,189,248,.14),rgba(34,197,94,.08),rgba(13,23,38,.94))] p-4 shadow-[0_18px_44px_rgba(14,165,233,0.14)]">
-                    <p className="text-sm font-semibold text-slate-300">Leitura automática dos dados recentes do aluno selecionado.</p>
-                    <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_.9fr]">
-                      <div className="space-y-3">
-                        <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-3">
-                          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Status geral</p>
-                          <p className="mt-2 text-base font-semibold text-white">Aluno em acompanhamento ativo.</p>
-                        </div>
-                        <div className="rounded-lg border border-line bg-ink/45 p-3">
-                          <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Risco de abandono</p>
-                          <p className="mt-2 text-2xl font-black text-white">{selectedAbandonmentRisk}</p>
-                        </div>
-                        <div className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3">
-                          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Próxima ação recomendada</p>
-                          <p className="mt-2 text-sm leading-6 text-slate-100">Enviar mensagem de incentivo e reforçar a meta da semana.</p>
-                          {selectedStudentWhatsAppUrl ? (
-                            <a className="btn-secondary mt-3 w-full sm:w-auto" href={selectedStudentWhatsAppUrl} target="_blank" rel="noopener noreferrer">
-                              💬 Falar com o aluno
-                            </a>
-                          ) : (
-                            <p className="mt-3 rounded-md border border-line bg-ink/50 px-3 py-2 text-sm font-semibold text-slate-300">Telefone do aluno não cadastrado</p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-1">
-                        <div className="rounded-lg border border-fitgreen/25 bg-fitgreen/10 p-3">
-                          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Pontos positivos</p>
-                          <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
-                            <p>{selectedHasAssessment ? '✅ Avaliação física registrada' : '✅ Cadastro do aluno disponível'}</p>
-                            <p>{selectedHasRecentCheckIn ? '✅ Check-in respondido recentemente' : '✅ Acompanhamento pronto para receber check-ins'}</p>
-                            <p>{selectedPeriodization ? '✅ Periodização ativa' : '✅ Plano pode ser estruturado por periodização'}</p>
-                          </div>
-                        </div>
-                        <div className="rounded-lg border border-fitorange/25 bg-fitorange/10 p-3">
-                          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitorange">Pontos de atenção</p>
-                          <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
-                            <p>{selectedHasWorkout ? '⚠️ Verificar frequência de treino' : '⚠️ Nenhum treino concluído registrado'}</p>
-                            <p>{selectedHasRecentCheckIn ? '⚠️ Acompanhar hidratação' : '⚠️ Aluno está sem check-in recente'}</p>
-                            {!selectedHasAssessment && <p>⚠️ Aluno ainda não possui avaliação física registrada.</p>}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </Panel>
 
                 <Panel title="Peso e gordura do aluno">
                   <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -1232,7 +1431,9 @@ function AdminDashboard({
             <Empty title="Nenhum aluno selecionado" text="Selecione um aluno no seletor superior para ver o resumo individual." />
             <Panel title="🤖 Análise Inteligente Geral">
               <div className="rounded-xl border border-fitblue/40 bg-[linear-gradient(135deg,rgba(56,189,248,.14),rgba(13,23,38,.94))] p-4">
-                <p className="text-base font-semibold text-white">Selecione um aluno para visualizar a análise inteligente.</p>
+                <p className="text-sm font-semibold text-slate-300">Leitura automática dos dados recentes do aluno selecionado.</p>
+                <p className="mt-3 text-base font-semibold text-white">Selecione um aluno para visualizar a análise inteligente.</p>
+                <button className="btn-primary mt-3 w-full cursor-not-allowed opacity-60 sm:w-auto" disabled>📊 Ver relatório inteligente</button>
               </div>
             </Panel>
           </Stack>
@@ -1371,6 +1572,123 @@ function IntelligentAnalysisCard({
               )}
             </div>
           </div>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function StudentSmartReportPanel({ report }: { report: StudentSmartReport }) {
+  const studentPhone = getStudentContactPhone(report.student);
+  const whatsappUrl = studentPhone
+    ? `https://wa.me/${studentPhone}?text=${encodeURIComponent(`Olá, ${studentDisplayName(report.student)}! Analisei sua evolução no PersonalPro Evolution e quero alinhar alguns pontos com você para a próxima semana.`)}`
+    : '';
+  const weightDiffText = `${report.bodyEvolution.weightDiff > 0 ? '+' : ''}${report.bodyEvolution.weightDiff} kg`;
+  const bodyFatDiffText = `${report.bodyEvolution.bodyFatDiff > 0 ? '+' : ''}${report.bodyEvolution.bodyFatDiff}%`;
+
+  return (
+    <Panel title="📊 Relatório Inteligente do Aluno" action={<Badge label={report.abandonmentRiskBadge} />}>
+      <div className="space-y-4 rounded-xl border border-fitblue/35 bg-[linear-gradient(135deg,rgba(56,189,248,.1),rgba(13,23,38,.96))] p-4 shadow-[0_18px_44px_rgba(14,165,233,0.12)]">
+        <div>
+          <p className="text-sm font-semibold text-slate-300">Resumo profissional da evolução, consistência e pontos de atenção.</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <InfoBox label="Aluno" value={studentDisplayName(report.student)} />
+            <InfoBox label="Data do relatório" value={report.reportDate} />
+            <InfoBox label="Status geral" value={report.student.status} />
+            <InfoBox label="Risco de abandono" value={report.abandonmentRiskBadge} />
+            <InfoBox label="Próxima ação" value={report.nextAction} />
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Resumo executivo</p>
+          <p className="mt-2 text-sm leading-6 text-slate-100">{report.executiveSummary}</p>
+          <p className="mt-2 text-sm leading-6 text-slate-300">{report.riskExplanation}</p>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="rounded-lg border border-line bg-ink/45 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Evolução corporal</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <InfoBox label="Peso inicial" value={`${report.bodyEvolution.initialWeight} kg`} />
+              <InfoBox label="Peso atual" value={`${report.bodyEvolution.currentWeight} kg`} />
+              <InfoBox label="Diferença de peso" value={weightDiffText} />
+              <InfoBox label="Última avaliação" value={report.bodyEvolution.lastAssessment} />
+              <InfoBox label="Gordura inicial" value={report.bodyEvolution.initialBodyFat ? `${report.bodyEvolution.initialBodyFat}%` : 'Sem registro'} />
+              <InfoBox label="Gordura atual" value={report.bodyEvolution.currentBodyFat ? `${report.bodyEvolution.currentBodyFat}%` : 'Sem registro'} />
+              <InfoBox label="Diferença de gordura" value={report.bodyEvolution.initialBodyFat || report.bodyEvolution.currentBodyFat ? bodyFatDiffText : 'Sem registro'} />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-line bg-ink/45 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Consistência de treino</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <InfoBox label="Treinos concluídos" value={report.trainingConsistency.totalWorkouts} />
+              <InfoBox label="Treinos no mês" value={report.trainingConsistency.monthWorkouts} />
+              <InfoBox label="Último treino" value={report.trainingConsistency.latestWorkout} />
+              <InfoBox label="Dias sem treinar" value={report.trainingConsistency.daysWithoutTraining} />
+              <InfoBox label="Aderência" value={`${report.trainingConsistency.adherence}%`} />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="rounded-lg border border-line bg-ink/45 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Check-in e comportamento</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <InfoBox label="Último check-in" value={report.checkinBehavior.latestCheckIn} />
+              <InfoBox label="Peso no check-in" value={report.checkinBehavior.currentWeight} />
+              <InfoBox label="Motivação" value={report.checkinBehavior.motivation} />
+              <InfoBox label="Estresse" value={report.checkinBehavior.stress} />
+              <InfoBox label="Sono" value={report.checkinBehavior.sleep} />
+              <InfoBox label="Alimentação" value={report.checkinBehavior.food} />
+              <InfoBox label="Dificuldade" value={report.checkinBehavior.difficulty} />
+              <InfoBox label="Vitória" value={report.checkinBehavior.victory} />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-line bg-ink/45 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Hidratação, jornada e plano</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <InfoBox label="Meta de água" value={`${report.hydration.goal} litros`} />
+              <InfoBox label="Consumo hoje" value={`${report.hydration.consumed} litros`} />
+              <InfoBox label="Progresso água" value={`${report.hydration.progress}%`} />
+              <InfoBox label="Status água" value={report.hydration.status} />
+              <InfoBox label="Dia da jornada" value={`Dia ${report.journey.day} de 90`} />
+              <InfoBox label="Fase atual" value={report.journey.phase} />
+              <InfoBox label="Score geral" value={`${report.journey.score}/100`} />
+              <InfoBox label="Conquistas ativas" value={report.journey.activeAchievements} />
+              <InfoBox label="Periodização ativa" value={report.periodization.active} />
+              <InfoBox label="Duração" value={report.periodization.duration} />
+              <InfoBox label="Status financeiro" value={report.financial.summary} />
+              <InfoBox label="Próximo vencimento" value={report.financial.dueDate} />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="rounded-lg border border-fitgreen/25 bg-fitgreen/10 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Pontos positivos</p>
+            <div className="mt-3 space-y-2 text-sm leading-6 text-slate-100">
+              {report.positives.map((item) => <p key={item}>✅ {item}</p>)}
+            </div>
+          </div>
+          <div className="rounded-lg border border-fitorange/25 bg-fitorange/10 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-fitorange">Riscos e pontos de atenção</p>
+            <div className="mt-3 space-y-2 text-sm leading-6 text-slate-100">
+              {report.attentionPoints.map((item) => <p key={item}>⚠️ {item}</p>)}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Próxima ação recomendada</p>
+          <p className="mt-2 text-sm leading-6 text-slate-100">{report.nextAction}</p>
+          {whatsappUrl ? (
+            <a className="btn-secondary mt-3 w-full sm:w-auto" href={whatsappUrl} target="_blank" rel="noopener noreferrer">💬 Enviar mensagem para o aluno</a>
+          ) : (
+            <p className="mt-3 rounded-md border border-line bg-ink/50 px-3 py-2 text-sm font-semibold text-slate-300">Telefone do aluno não cadastrado.</p>
+          )}
         </div>
       </div>
     </Panel>
@@ -3994,6 +4312,30 @@ function studentDisplayName(student?: Student | null) {
   if (fullName && !isEmailLike(fullName)) return fullName;
   if (name && !isEmailLike(name)) return name;
   return fullName || name || student.email || 'Aluno sem nome';
+}
+
+function getStudentContactPhone(student?: Student | null) {
+  const source = student as
+    | (Student & {
+        whatsapp?: string;
+        whatsappNumber?: string;
+        phoneNumber?: string;
+        contact?: string;
+        telefone?: string;
+      })
+    | null
+    | undefined;
+  const candidates = [
+    source?.phone,
+    source?.whatsapp,
+    source?.whatsappNumber,
+    source?.phoneNumber,
+    source?.contact,
+    source?.telefone
+  ];
+  return candidates
+    .map((value) => String(value || '').replace(/\D/g, ''))
+    .find((value) => value.length >= 8) || '';
 }
 
 function resolveStudentForUser(data: AppData, user: User) {
