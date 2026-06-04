@@ -486,6 +486,15 @@ interface StudentSmartReport {
     dueDate: string;
     summary: string;
   };
+  weeklyGoals: {
+    total: number;
+    inProgress: number;
+    completed: number;
+    overdue: number;
+    canceled: number;
+    summary: string;
+    items: { title: string; category: string; progress: number; status: WeeklyGoalStatus }[];
+  };
   positives: string[];
   attentionPoints: string[];
   abandonmentRisk: IntelligentRisk;
@@ -670,6 +679,8 @@ function buildStudentSmartReport(
   const latestCheckInDate = latestCheckIn ? getCheckInDateValue(latestCheckIn) : '';
   const todayWater = getWaterRecord(waterRecords, student.id);
   const waterProgress = Math.min(100, Math.round((todayWater.waterConsumed / todayWater.waterGoal) * 100));
+  const weeklyGoals = getStudentWeeklyGoals(loadWeeklyGoals(), student.id, data, waterRecords);
+  const weeklyGoalSummary = summarizeWeeklyGoals(weeklyGoals);
   const activePeriodization = data.periodizations.find((item) => item.studentId === student.id && item.status === 'ativo');
   const payments = data.payments.filter((payment) => payment.studentId === student.id);
   const financialStatus = payments.find((payment) => payment.status === 'atrasado') ?? payments.find((payment) => payment.status === 'pendente') ?? payments[0];
@@ -699,13 +710,15 @@ function buildStudentSmartReport(
     checkIns.length ? 'Check-in respondido' : '',
     activePeriodization ? 'Periodização ativa' : '',
     workoutLogs.length ? 'Treino concluído registrado' : '',
-    todayWater.waterConsumed >= todayWater.waterGoal ? 'Meta de água batida hoje' : ''
+    todayWater.waterConsumed >= todayWater.waterGoal ? 'Meta de água batida hoje' : '',
+    weeklyGoalSummary.completed ? 'Meta semanal concluída' : ''
   ].filter(Boolean);
   const attentionPoints = [
     !evolution.assessmentCount ? 'Sem avaliação física registrada' : '',
     !latestCheckIn || Number(daysSince(latestCheckInDate)) > 10 ? 'Check-in pendente ou antigo' : '',
     !latestWorkoutLog || Number(daysSince(latestWorkoutCompletedAt)) > 7 ? 'Baixa frequência recente de treinos' : '',
     todayWater.waterConsumed < todayWater.waterGoal ? 'Hidratação abaixo da meta diária' : '',
+    weeklyGoalSummary.overdue || weeklyGoalSummary.inProgress ? 'Existem metas semanais pendentes ou atrasadas' : '',
     financialStatus && financialStatus.status !== 'pago' ? `Financeiro ${financialStatus.status}` : ''
   ].filter(Boolean);
   const hasEnoughData = Boolean(evolution.assessmentCount && workoutLogs.length && checkIns.length);
@@ -763,6 +776,18 @@ function buildStudentSmartReport(
       status: financialStatus?.status ?? 'Sem registro',
       dueDate: financialStatus ? formatDate(financialStatus.dueDate) : 'Sem registro',
       summary: financialStatus ? `${financialStatus.status} - ${formatCurrency(financialStatus.amount)}` : 'Sem pagamentos registrados'
+    },
+    weeklyGoals: {
+      ...weeklyGoalSummary,
+      summary: weeklyGoalSummary.total
+        ? `${weeklyGoalSummary.inProgress} em andamento, ${weeklyGoalSummary.completed} concluídas e ${weeklyGoalSummary.overdue} atrasadas.`
+        : 'Nenhuma meta semanal cadastrada.',
+      items: weeklyGoals.slice(0, 6).map((goal) => ({
+        title: goal.title,
+        category: goal.category,
+        progress: goal.progress,
+        status: goal.status
+      }))
     },
     positives: positives.length ? positives : ['Cadastro do aluno disponível'],
     attentionPoints: attentionPoints.length ? attentionPoints : ['Nenhum ponto crítico encontrado agora'],
@@ -1185,6 +1210,7 @@ function AdminDashboard({
   const [showStudentSummary, setShowStudentSummary] = useState(false);
   const [showWorkoutHistory, setShowWorkoutHistory] = useState(false);
   const [showSmartReport, setShowSmartReport] = useState(false);
+  const { goals: dashboardWeeklyGoals } = useWeeklyGoalsStore();
   const [workoutHistoryFilter, setWorkoutHistoryFilter] = useState<'today' | 'week' | 'month' | 'date' | ''>('');
   const [workoutHistoryDate, setWorkoutHistoryDate] = useState('');
   const studentsWithCheckIn = new Set(data.checkIns.map((item) => item.studentId));
@@ -1217,6 +1243,8 @@ function AdminDashboard({
   const evolutionSummary = currentStudent ? getStudentEvolutionSummary(currentStudent, data.assessments) : undefined;
   const smartReportWaterRecords = loadWaterRecords();
   const smartReport = currentStudent ? buildStudentSmartReport(currentStudent.id, data, smartReportWaterRecords) : null;
+  const selectedWeeklyGoals = currentStudent ? getStudentWeeklyGoals(dashboardWeeklyGoals, currentStudent.id, data, smartReportWaterRecords) : [];
+  const selectedWeeklyGoalSummary = summarizeWeeklyGoals(selectedWeeklyGoals);
   const selectedAssessments = evolutionSummary?.assessments ?? [];
   const selectedFinancialStatus = selectedPayments.find((payment) => payment.status === 'atrasado') ?? selectedPayments.find((payment) => payment.status === 'pendente') ?? selectedPayments[0];
   const hasDashboardWeightData = Boolean(evolutionSummary && (evolutionSummary.initialWeight || evolutionSummary.currentWeight || evolutionSummary.assessmentCount));
@@ -1335,6 +1363,7 @@ function AdminDashboard({
                         <p>{selectedHasAssessment ? '✅ Avaliação física registrada' : '✅ Cadastro do aluno disponível'}</p>
                         <p>{selectedHasRecentCheckIn ? '✅ Check-in respondido recentemente' : '✅ Acompanhamento pronto para receber check-ins'}</p>
                         <p>{selectedPeriodization ? '✅ Periodização ativa' : '✅ Plano pode ser estruturado por periodização'}</p>
+                        <p>{selectedWeeklyGoalSummary.completed ? '✅ Meta semanal concluída' : '✅ Metas semanais prontas para acompanhamento'}</p>
                       </div>
                     </div>
                     <div className="rounded-lg border border-fitorange/25 bg-fitorange/10 p-3">
@@ -1342,6 +1371,7 @@ function AdminDashboard({
                       <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
                         <p>{selectedHasWorkout ? '⚠️ Verificar frequência de treino' : '⚠️ Nenhum treino concluído registrado'}</p>
                         <p>{selectedHasRecentCheckIn ? '⚠️ Acompanhar hidratação' : '⚠️ Aluno está sem check-in recente'}</p>
+                        {(selectedWeeklyGoalSummary.inProgress || selectedWeeklyGoalSummary.overdue) ? <p>⚠️ Existem metas semanais pendentes ou atrasadas.</p> : null}
                         {!selectedHasAssessment && <p>⚠️ Aluno ainda não possui avaliação física registrada.</p>}
                       </div>
                     </div>
@@ -1349,6 +1379,8 @@ function AdminDashboard({
                 </div>
               </div>
             </Panel>
+
+            <WeeklyGoalsAdminCard data={data} student={currentStudent} waterRecords={smartReportWaterRecords} />
 
             {showSmartReport && smartReport && <StudentSmartReportPanel report={smartReport} settings={data.personalSettings} />}
 
@@ -1668,6 +1700,28 @@ function StudentSmartReportPanel({ report, settings }: { report: StudentSmartRep
               <InfoBox label="Próximo vencimento" value={report.financial.dueDate} />
             </div>
           </div>
+        </div>
+
+        <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Metas semanais</p>
+          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <InfoBox label="Em andamento" value={report.weeklyGoals.inProgress} />
+            <InfoBox label="Concluídas" value={report.weeklyGoals.completed} />
+            <InfoBox label="Atrasadas" value={report.weeklyGoals.overdue} />
+            <InfoBox label="Total" value={report.weeklyGoals.total} />
+          </div>
+          <p className="mt-3 text-sm leading-6 text-slate-200">{report.weeklyGoals.summary}</p>
+          {report.weeklyGoals.items.length ? (
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {report.weeklyGoals.items.map((goal) => (
+                <div key={`${goal.title}-${goal.category}`} className="rounded-lg border border-line bg-ink/45 p-3">
+                  <p className="font-semibold text-white">{goal.title}</p>
+                  <p className="mt-1 text-sm text-slate-300">{goal.category} - {goal.progress}%</p>
+                  <Badge label={goal.status} />
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-3 lg:grid-cols-2">
@@ -3090,8 +3144,30 @@ type WaterRecord = {
   waterConsumed: number;
 };
 
+type WeeklyGoalCategory = 'Treino' | 'Água' | 'Check-in' | 'Peso' | 'Alimentação' | 'Sono' | 'Motivação' | 'Outro';
+type WeeklyGoalStatus = 'Em andamento' | 'Concluída' | 'Atrasada' | 'Cancelada';
+
+type WeeklyGoal = {
+  id: string;
+  studentId: string;
+  weekStartDate: string;
+  weekEndDate: string;
+  title: string;
+  category: WeeklyGoalCategory;
+  targetValue: number;
+  currentValue: number;
+  unit: string;
+  status: WeeklyGoalStatus;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 const waterStorageKey = 'personalpro-water-records';
+const weeklyGoalsStorageKey = 'personalpro-weekly-goals';
 const waterGoalLiters = 3;
+const weeklyGoalCategories: WeeklyGoalCategory[] = ['Treino', 'Água', 'Check-in', 'Peso', 'Alimentação', 'Sono', 'Motivação', 'Outro'];
+const weeklyGoalStatuses: WeeklyGoalStatus[] = ['Em andamento', 'Concluída', 'Atrasada', 'Cancelada'];
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
@@ -3115,6 +3191,112 @@ function loadWaterRecords(): WaterRecord[] {
 function saveWaterRecords(records: WaterRecord[]) {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(waterStorageKey, JSON.stringify(records));
+}
+
+function loadWeeklyGoals(): WeeklyGoal[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(weeklyGoalsStorageKey);
+    const parsed = raw ? JSON.parse(raw) as WeeklyGoal[] : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeWeeklyGoal).filter((goal) => goal.studentId) : [];
+  } catch (error) {
+    console.error('Erro ao carregar metas semanais:', error);
+    return [];
+  }
+}
+
+function saveWeeklyGoals(goals: WeeklyGoal[]) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(weeklyGoalsStorageKey, JSON.stringify(goals));
+  window.dispatchEvent(new Event('personalpro-weekly-goals-updated'));
+}
+
+function normalizeWeeklyGoal(goal: Partial<WeeklyGoal>): WeeklyGoal {
+  const now = new Date().toISOString();
+  const week = getCurrentWeekRange();
+  const category = weeklyGoalCategories.includes(goal.category as WeeklyGoalCategory) ? goal.category as WeeklyGoalCategory : 'Outro';
+  const status = weeklyGoalStatuses.includes(goal.status as WeeklyGoalStatus) ? goal.status as WeeklyGoalStatus : 'Em andamento';
+  return {
+    id: String(goal.id || makeId('weekly-goal')),
+    studentId: String(goal.studentId || ''),
+    weekStartDate: dateKey(goal.weekStartDate) || week.start,
+    weekEndDate: dateKey(goal.weekEndDate) || week.end,
+    title: String(goal.title || ''),
+    category,
+    targetValue: Number(goal.targetValue || 0),
+    currentValue: Number(goal.currentValue || 0),
+    unit: String(goal.unit || ''),
+    status,
+    notes: String(goal.notes || ''),
+    createdAt: String(goal.createdAt || now),
+    updatedAt: String(goal.updatedAt || now)
+  };
+}
+
+function getCurrentWeekRange(date = new Date()) {
+  const start = new Date(date);
+  const day = start.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  start.setDate(start.getDate() + diff);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start: dateKey(start.toISOString()), end: dateKey(end.toISOString()) };
+}
+
+function isDateBetween(value: string, start: string, end: string) {
+  const key = dateKey(value);
+  return Boolean(key && key >= start && key <= end);
+}
+
+function getWeeklyGoalComputedValue(goal: WeeklyGoal, data: AppData, waterRecords: WaterRecord[]) {
+  if (goal.category === 'Treino') {
+    return data.workoutLogs.filter((log) => log.studentId === goal.studentId && isDateBetween(getWorkoutLogCompletedAt(log), goal.weekStartDate, goal.weekEndDate)).length;
+  }
+  if (goal.category === 'Água') {
+    return waterRecords.filter((record) => record.studentId === goal.studentId && isDateBetween(record.date, goal.weekStartDate, goal.weekEndDate) && record.waterConsumed >= record.waterGoal).length;
+  }
+  if (goal.category === 'Check-in') {
+    return data.checkIns.filter((checkIn) => checkIn.studentId === goal.studentId && isDateBetween(getCheckInDateValue(checkIn), goal.weekStartDate, goal.weekEndDate)).length;
+  }
+  return goal.currentValue;
+}
+
+function resolveWeeklyGoal(goal: WeeklyGoal, data: AppData, waterRecords: WaterRecord[]) {
+  const currentValue = getWeeklyGoalComputedValue(goal, data, waterRecords);
+  const targetValue = Number(goal.targetValue || 0);
+  const progress = targetValue > 0 ? Math.min(100, Math.round((currentValue / targetValue) * 100)) : 0;
+  const today = todayKey();
+  const computedStatus: WeeklyGoalStatus =
+    goal.status === 'Cancelada' ? 'Cancelada' :
+    currentValue >= targetValue && targetValue > 0 ? 'Concluída' :
+    goal.weekEndDate < today ? 'Atrasada' :
+    'Em andamento';
+  return { ...goal, currentValue, status: computedStatus, progress };
+}
+
+function getStudentWeeklyGoals(goals: WeeklyGoal[], studentId: string, data: AppData, waterRecords: WaterRecord[]) {
+  return goals
+    .filter((goal) => goal.studentId === studentId)
+    .map((goal) => resolveWeeklyGoal(goal, data, waterRecords))
+    .sort((a, b) => b.weekStartDate.localeCompare(a.weekStartDate) || b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function summarizeWeeklyGoals(goals: ReturnType<typeof getStudentWeeklyGoals>) {
+  return {
+    total: goals.length,
+    inProgress: goals.filter((goal) => goal.status === 'Em andamento').length,
+    completed: goals.filter((goal) => goal.status === 'Concluída').length,
+    overdue: goals.filter((goal) => goal.status === 'Atrasada').length,
+    canceled: goals.filter((goal) => goal.status === 'Cancelada').length
+  };
+}
+
+function weeklyGoalStatusClass(status: WeeklyGoalStatus) {
+  if (status === 'Concluída') return 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen';
+  if (status === 'Atrasada') return 'border-fitorange/40 bg-fitorange/10 text-fitorange';
+  if (status === 'Cancelada') return 'border-slate-500/30 bg-slate-500/10 text-slate-300';
+  return 'border-fitblue/40 bg-fitblue/10 text-fitblue';
 }
 
 function waterCelebrationKey(studentId: string, date: string) {
@@ -3257,7 +3439,29 @@ function buildStudentTimeline(studentId: string, data: AppData, waterRecords: Wa
       details: [`Meta: ${formatLiters(record.waterGoal)}`, `Consumido: ${formatLiters(record.waterConsumed)}`]
     }));
 
-  return [...assessmentEvents, ...workoutEvents, ...checkInEvents, ...periodizationEvents, ...paymentEvents, ...waterEvents]
+  const weeklyGoals = getStudentWeeklyGoals(loadWeeklyGoals(), studentId, data, waterRecords);
+  const weeklyGoalEvents = weeklyGoals.flatMap<TimelineEvent>((goal) => {
+    const createdEvent: TimelineEvent = {
+      id: `weekly-goal-created-${goal.id}`,
+      icon: '🎯',
+      title: '🎯 Meta semanal criada',
+      date: goal.createdAt,
+      details: [`Meta: ${goal.title}`, `Período: ${formatDate(goal.weekStartDate)} a ${formatDate(goal.weekEndDate)}`]
+    };
+    if (goal.status !== 'Concluída') return [createdEvent];
+    return [
+      createdEvent,
+      {
+        id: `weekly-goal-completed-${goal.id}`,
+        icon: '🏆',
+        title: '🏆 Meta semanal concluída',
+        date: goal.updatedAt || goal.weekEndDate,
+        details: [`Meta: ${goal.title}`, `Progresso: ${goal.currentValue}/${goal.targetValue} ${goal.unit}`]
+      }
+    ];
+  });
+
+  return [...assessmentEvents, ...workoutEvents, ...checkInEvents, ...periodizationEvents, ...paymentEvents, ...waterEvents, ...weeklyGoalEvents]
     .sort((a, b) => timelineTimestamp(b.date) - timelineTimestamp(a.date));
 }
 
@@ -3306,6 +3510,199 @@ function StudentTimeline({ data, studentId, waterRecords = [], compactInitial = 
           title="Nenhum evento registrado ainda na jornada deste aluno."
           text="Quando o aluno fizer avaliações, treinos, check-ins ou pagamentos, eles aparecerão aqui."
         />
+      )}
+    </Panel>
+  );
+}
+
+function useWeeklyGoalsStore() {
+  const [goals, setGoals] = useState<WeeklyGoal[]>(() => loadWeeklyGoals());
+
+  useEffect(() => {
+    const sync = () => setGoals(loadWeeklyGoals());
+    window.addEventListener('personalpro-weekly-goals-updated', sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener('personalpro-weekly-goals-updated', sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, []);
+
+  const persistGoals = (nextGoals: WeeklyGoal[]) => {
+    saveWeeklyGoals(nextGoals);
+    setGoals(nextGoals);
+  };
+
+  return { goals, persistGoals };
+}
+
+function createWeeklyGoalDraft(studentId: string): WeeklyGoal {
+  const week = getCurrentWeekRange();
+  const now = new Date().toISOString();
+  return {
+    id: '',
+    studentId,
+    weekStartDate: week.start,
+    weekEndDate: week.end,
+    title: '',
+    category: 'Treino',
+    targetValue: 3,
+    currentValue: 0,
+    unit: 'treinos',
+    status: 'Em andamento',
+    notes: '',
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function WeeklyGoalProgressCard({ goal, compact = false }: { goal: ReturnType<typeof getStudentWeeklyGoals>[number]; compact?: boolean }) {
+  return (
+    <div className={`rounded-xl border p-3 ${weeklyGoalStatusClass(goal.status)}`}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-black text-white">{goal.title || 'Meta semanal'}</p>
+          <p className="mt-1 text-sm text-slate-300">{goal.category} - {formatDate(goal.weekStartDate)} a {formatDate(goal.weekEndDate)}</p>
+        </div>
+        <Badge label={goal.status} />
+      </div>
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <p className="text-sm font-semibold text-slate-200">{goal.currentValue} / {goal.targetValue} {goal.unit}</p>
+        <p className="text-lg font-black text-white">{goal.progress}%</p>
+      </div>
+      <div className="mt-2 h-3 overflow-hidden rounded-full bg-ink/80">
+        <div className="h-full rounded-full bg-[linear-gradient(90deg,#38bdf8,#35e68c)] transition-all duration-500" style={{ width: `${goal.progress}%` }} />
+      </div>
+      {!compact && goal.notes && <p className="mt-3 text-sm leading-6 text-slate-300">{goal.notes}</p>}
+    </div>
+  );
+}
+
+function WeeklyGoalsAdminCard({ data, student, waterRecords }: { data: AppData; student: Student; waterRecords: WaterRecord[] }) {
+  const { goals, persistGoals } = useWeeklyGoalsStore();
+  const [form, setForm] = useState<WeeklyGoal>(() => createWeeklyGoalDraft(student.id));
+  const [isEditing, setIsEditing] = useState(false);
+  const studentGoals = getStudentWeeklyGoals(goals, student.id, data, waterRecords);
+  const summary = summarizeWeeklyGoals(studentGoals);
+
+  useEffect(() => {
+    setForm(createWeeklyGoalDraft(student.id));
+    setIsEditing(false);
+  }, [student.id]);
+
+  const startNew = () => {
+    setForm(createWeeklyGoalDraft(student.id));
+    setIsEditing(true);
+  };
+
+  const editGoal = (goal: WeeklyGoal) => {
+    setForm({ ...goal });
+    setIsEditing(true);
+  };
+
+  const saveGoal = () => {
+    if (!form.title.trim()) {
+      window.alert('Informe o título da meta semanal.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const nextGoal = normalizeWeeklyGoal({
+      ...form,
+      id: form.id || makeId('weekly-goal'),
+      studentId: student.id,
+      updatedAt: now,
+      createdAt: form.createdAt || now
+    });
+    const nextGoals = goals.some((goal) => goal.id === nextGoal.id)
+      ? goals.map((goal) => goal.id === nextGoal.id ? nextGoal : goal)
+      : [...goals, nextGoal];
+    persistGoals(nextGoals);
+    setForm(nextGoal);
+    setIsEditing(false);
+    window.alert(form.id ? 'Meta semanal atualizada com sucesso.' : 'Meta semanal criada com sucesso.');
+  };
+
+  const deleteGoal = (goal: WeeklyGoal) => {
+    if (!window.confirm('Tem certeza que deseja excluir esta meta semanal?')) return;
+    persistGoals(goals.filter((item) => item.id !== goal.id));
+    if (form.id === goal.id) setForm(createWeeklyGoalDraft(student.id));
+    setIsEditing(false);
+    window.alert('Meta semanal excluída com sucesso.');
+  };
+
+  const completeGoal = (goal: WeeklyGoal) => {
+    const nextGoal = normalizeWeeklyGoal({
+      ...goal,
+      currentValue: goal.targetValue,
+      status: 'Concluída',
+      updatedAt: new Date().toISOString()
+    });
+    persistGoals(goals.map((item) => item.id === goal.id ? nextGoal : item));
+    window.alert('Meta semanal concluída.');
+  };
+
+  return (
+    <Panel title="🎯 Metas Semanais do Aluno">
+      <div className="grid gap-3 sm:grid-cols-4">
+        <InfoBox label="Em andamento" value={summary.inProgress} />
+        <InfoBox label="Concluídas" value={summary.completed} />
+        <InfoBox label="Atrasadas" value={summary.overdue} />
+        <InfoBox label="Total" value={summary.total} />
+      </div>
+
+      {isEditing ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <Input label="Título da meta" value={form.title} onChange={(value) => setForm({ ...form, title: value })} />
+          <Select label="Categoria" value={form.category} onChange={(value) => setForm({ ...form, category: value as WeeklyGoalCategory })} options={weeklyGoalCategories.map((item) => [item, item])} />
+          <Input label="Valor alvo" type="number" value={String(form.targetValue)} onChange={(value) => setForm({ ...form, targetValue: Number(value || 0) })} />
+          <Input label="Valor atual" type="number" value={String(form.currentValue)} onChange={(value) => setForm({ ...form, currentValue: Number(value || 0) })} />
+          <Input label="Unidade" value={form.unit} onChange={(value) => setForm({ ...form, unit: value })} />
+          <Select label="Status" value={form.status} onChange={(value) => setForm({ ...form, status: value as WeeklyGoalStatus })} options={weeklyGoalStatuses.map((item) => [item, item])} />
+          <Input label="Semana inicial" type="date" value={form.weekStartDate} onChange={(value) => setForm({ ...form, weekStartDate: value })} />
+          <Input label="Semana final" type="date" value={form.weekEndDate} onChange={(value) => setForm({ ...form, weekEndDate: value })} />
+          <Textarea label="Observações" value={form.notes} onChange={(value) => setForm({ ...form, notes: value })} />
+          <div className="flex flex-col gap-2 md:col-span-2 sm:flex-row">
+            <button className="btn-primary w-full sm:w-auto" onClick={saveGoal}>{form.id ? 'Salvar alterações' : 'Criar meta'}</button>
+            <button className="btn-secondary w-full sm:w-auto" onClick={() => { setIsEditing(false); setForm(createWeeklyGoalDraft(student.id)); }}>Cancelar</button>
+          </div>
+        </div>
+      ) : (
+        <button className="btn-primary mt-4 w-full sm:w-auto" onClick={startNew}>Criar nova meta</button>
+      )}
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {studentGoals.length ? studentGoals.map((goal) => (
+          <div key={goal.id} className="space-y-3 rounded-xl border border-fitblue/20 bg-ink/45 p-3">
+            <WeeklyGoalProgressCard goal={goal} />
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => editGoal(goal)}>Editar meta</button>
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => completeGoal(goal)}>Marcar como concluída</button>
+              <button className="btn-danger w-full sm:w-auto" onClick={() => deleteGoal(goal)}>Excluir meta</button>
+            </div>
+          </div>
+        )) : (
+          <Empty title="Nenhuma meta semanal criada para este aluno." text="Crie metas de treino, água, check-in ou rotina para acompanhar a semana." />
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function StudentWeeklyGoalsCard({ data, student, waterRecords }: { data: AppData; student: Student; waterRecords: WaterRecord[] }) {
+  const { goals } = useWeeklyGoalsStore();
+  const week = getCurrentWeekRange();
+  const studentGoals = getStudentWeeklyGoals(goals, student.id, data, waterRecords);
+  const weeklyGoals = studentGoals.filter((goal) => goal.weekEndDate >= week.start && goal.weekStartDate <= week.end);
+  const visibleGoals = weeklyGoals.length ? weeklyGoals : studentGoals.slice(0, 4);
+
+  return (
+    <Panel title="🎯 Minhas metas da semana">
+      {visibleGoals.length ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          {visibleGoals.map((goal) => <WeeklyGoalProgressCard key={goal.id} goal={goal} />)}
+        </div>
+      ) : (
+        <Empty title="Nenhuma meta semanal definida ainda." text="Quando o personal criar uma meta para você, ela aparecerá aqui." />
       )}
     </Panel>
   );
@@ -3665,6 +4062,8 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
             ))}
           </div>
         </Panel>
+
+        {canEditWater && <StudentWeeklyGoalsCard data={data} student={student} waterRecords={waterRecords} />}
 
         <Panel title="Conquistas">
           {canEditWater ? (
@@ -4587,7 +4986,19 @@ function buildStudentSmartReportPrintHtml({
     </section>
 
     <section>
-      <h2>7. Financeiro</h2>
+      <h2>7. Metas semanais</h2>
+      <div class="grid">
+        ${metric('Em andamento', report.weeklyGoals.inProgress)}
+        ${metric('Concluídas', report.weeklyGoals.completed)}
+        ${metric('Atrasadas', report.weeklyGoals.overdue)}
+        ${metric('Total de metas', report.weeklyGoals.total)}
+      </div>
+      <p class="muted">${escapeHtml(report.weeklyGoals.summary)}</p>
+      ${report.weeklyGoals.items.length ? `<ul>${report.weeklyGoals.items.map((goal) => `<li>${escapeHtml(goal.title)} - ${escapeHtml(goal.category)} - ${goal.progress}% - ${escapeHtml(goal.status)}</li>`).join('')}</ul>` : '<p class="muted">Nenhuma meta semanal cadastrada.</p>'}
+    </section>
+
+    <section>
+      <h2>8. Financeiro</h2>
       <div class="grid">
         ${metric('Status financeiro', report.financial.summary)}
         ${metric('Próximo vencimento', report.financial.dueDate)}
@@ -4596,17 +5007,17 @@ function buildStudentSmartReportPrintHtml({
     </section>
 
     <section>
-      <h2>8. Pontos positivos</h2>
+      <h2>9. Pontos positivos</h2>
       ${list(report.positives, '✓')}
     </section>
 
     <section>
-      <h2>9. Pontos de atenção</h2>
+      <h2>10. Pontos de atenção</h2>
       ${list(report.attentionPoints, '!')}
     </section>
 
     <section>
-      <h2>10. Próxima ação recomendada</h2>
+      <h2>11. Próxima ação recomendada</h2>
       <p>${escapeHtml(report.nextAction)}</p>
     </section>
 
