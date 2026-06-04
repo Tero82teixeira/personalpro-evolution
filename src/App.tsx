@@ -1350,7 +1350,7 @@ function AdminDashboard({
               </div>
             </Panel>
 
-            {showSmartReport && smartReport && <StudentSmartReportPanel report={smartReport} />}
+            {showSmartReport && smartReport && <StudentSmartReportPanel report={smartReport} settings={data.personalSettings} />}
 
             {showStudentSummary && (
               <Stack>
@@ -1578,7 +1578,7 @@ function IntelligentAnalysisCard({
   );
 }
 
-function StudentSmartReportPanel({ report }: { report: StudentSmartReport }) {
+function StudentSmartReportPanel({ report, settings }: { report: StudentSmartReport; settings?: PersonalSettings }) {
   const studentPhone = getStudentContactPhone(report.student);
   const whatsappUrl = studentPhone
     ? `https://wa.me/${studentPhone}?text=${encodeURIComponent(`Olá, ${studentDisplayName(report.student)}! Analisei sua evolução no PersonalPro Evolution e quero alinhar alguns pontos com você para a próxima semana.`)}`
@@ -1598,6 +1598,9 @@ function StudentSmartReportPanel({ report }: { report: StudentSmartReport }) {
             <InfoBox label="Risco de abandono" value={report.abandonmentRiskBadge} />
             <InfoBox label="Próxima ação" value={report.nextAction} />
           </div>
+          <button className="btn-primary mt-4 w-full sm:w-auto" onClick={() => openStudentSmartReportPrint(report, settings)}>
+            📄 Exportar PDF
+          </button>
         </div>
 
         <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-4">
@@ -4312,6 +4315,313 @@ function studentDisplayName(student?: Student | null) {
   if (fullName && !isEmailLike(fullName)) return fullName;
   if (name && !isEmailLike(name)) return name;
   return fullName || name || student.email || 'Aluno sem nome';
+}
+
+function openStudentSmartReportPrint(report: StudentSmartReport, settings?: PersonalSettings) {
+  if (typeof window === 'undefined') return;
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    window.alert('Use o navegador para salvar ou compartilhar o relatório em PDF.');
+    return;
+  }
+
+  const brandName = settings?.brandName || defaultPersonalSettings.brandName || 'PersonalPro Evolution';
+  const personalName = settings?.personalName || defaultPersonalSettings.personalName || '';
+  const bodyFatDiffText = report.bodyEvolution.initialBodyFat || report.bodyEvolution.currentBodyFat
+    ? `${report.bodyEvolution.bodyFatDiff > 0 ? '+' : ''}${report.bodyEvolution.bodyFatDiff}%`
+    : 'Sem registro';
+  const weightDiffText = `${report.bodyEvolution.weightDiff > 0 ? '+' : ''}${report.bodyEvolution.weightDiff} kg`;
+  const html = buildStudentSmartReportPrintHtml({
+    brandName,
+    personalName,
+    studentName: studentDisplayName(report.student),
+    report,
+    weightDiffText,
+    bodyFatDiffText
+  });
+
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.setTimeout(() => {
+    printWindow.print();
+  }, 450);
+}
+
+function buildStudentSmartReportPrintHtml({
+  brandName,
+  personalName,
+  studentName,
+  report,
+  weightDiffText,
+  bodyFatDiffText
+}: {
+  brandName: string;
+  personalName: string;
+  studentName: string;
+  report: StudentSmartReport;
+  weightDiffText: string;
+  bodyFatDiffText: string;
+}) {
+  const metric = (label: string, value: unknown) => `
+    <div class="metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value ?? 'Sem registro'))}</strong>
+    </div>
+  `;
+  const list = (items: string[], icon: string) => items.length
+    ? `<ul>${items.map((item) => `<li>${escapeHtml(icon)} ${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '<p class="muted">Sem registros suficientes.</p>';
+
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(brandName)} - Relatório Inteligente do Aluno</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #f4f7fb;
+      color: #172033;
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.45;
+    }
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 32px;
+    }
+    header {
+      border-bottom: 3px solid #0ea5e9;
+      padding-bottom: 18px;
+      margin-bottom: 22px;
+    }
+    .brand {
+      color: #0f766e;
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 8px 0 6px;
+      font-size: 30px;
+      color: #0f172a;
+    }
+    .subline {
+      display: grid;
+      gap: 4px;
+      color: #475569;
+      font-size: 14px;
+    }
+    section {
+      break-inside: avoid;
+      background: #ffffff;
+      border: 1px solid #dbe5f0;
+      border-radius: 12px;
+      margin: 14px 0;
+      padding: 18px;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, .06);
+    }
+    h2 {
+      margin: 0 0 12px;
+      color: #075985;
+      font-size: 18px;
+    }
+    p {
+      margin: 0 0 8px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #f8fafc;
+    }
+    .metric span {
+      display: block;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .metric strong {
+      display: block;
+      margin-top: 4px;
+      color: #0f172a;
+      font-size: 16px;
+    }
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    li {
+      margin: 6px 0;
+    }
+    .muted {
+      color: #64748b;
+    }
+    .footer {
+      margin-top: 24px;
+      border-top: 1px solid #cbd5e1;
+      padding-top: 14px;
+      color: #64748b;
+      font-size: 12px;
+      text-align: center;
+    }
+    .print-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 16px;
+    }
+    .print-actions button {
+      border: 0;
+      border-radius: 10px;
+      background: #0ea5e9;
+      color: #fff;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 800;
+      padding: 11px 16px;
+    }
+    @media print {
+      body { background: #fff; }
+      .page { max-width: none; padding: 0; }
+      section { box-shadow: none; }
+      .print-actions { display: none; }
+    }
+    @media (max-width: 720px) {
+      .page { padding: 18px; }
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="print-actions"><button onclick="window.print()">Salvar ou imprimir PDF</button></div>
+    <header>
+      <div class="brand">${escapeHtml(brandName)}</div>
+      <h1>Relatório Inteligente do Aluno</h1>
+      <div class="subline">
+        <span><strong>Aluno:</strong> ${escapeHtml(studentName)}</span>
+        <span><strong>Data do relatório:</strong> ${escapeHtml(report.reportDate)}</span>
+        ${personalName ? `<span><strong>Personal:</strong> ${escapeHtml(personalName)}</span>` : ''}
+      </div>
+    </header>
+
+    <section>
+      <h2>1. Resumo executivo</h2>
+      <p>${escapeHtml(report.executiveSummary)}</p>
+      <p class="muted">${escapeHtml(report.riskExplanation)}</p>
+    </section>
+
+    <section>
+      <h2>2. Evolução corporal</h2>
+      <div class="grid">
+        ${metric('Peso inicial', `${report.bodyEvolution.initialWeight} kg`)}
+        ${metric('Peso atual', `${report.bodyEvolution.currentWeight} kg`)}
+        ${metric('Diferença de peso', weightDiffText)}
+        ${metric('Última avaliação', report.bodyEvolution.lastAssessment)}
+        ${metric('Gordura inicial', report.bodyEvolution.initialBodyFat ? `${report.bodyEvolution.initialBodyFat}%` : 'Sem registro')}
+        ${metric('Gordura atual', report.bodyEvolution.currentBodyFat ? `${report.bodyEvolution.currentBodyFat}%` : 'Sem registro')}
+        ${metric('Diferença de gordura', bodyFatDiffText)}
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Consistência de treino</h2>
+      <div class="grid">
+        ${metric('Total de treinos concluídos', report.trainingConsistency.totalWorkouts)}
+        ${metric('Treinos no mês', report.trainingConsistency.monthWorkouts)}
+        ${metric('Último treino', report.trainingConsistency.latestWorkout)}
+        ${metric('Dias sem treinar', report.trainingConsistency.daysWithoutTraining)}
+        ${metric('Aderência', `${report.trainingConsistency.adherence}%`)}
+      </div>
+    </section>
+
+    <section>
+      <h2>4. Check-in e comportamento</h2>
+      <div class="grid">
+        ${metric('Último check-in', report.checkinBehavior.latestCheckIn)}
+        ${metric('Peso do check-in', report.checkinBehavior.currentWeight)}
+        ${metric('Motivação', report.checkinBehavior.motivation)}
+        ${metric('Estresse', report.checkinBehavior.stress)}
+        ${metric('Sono', report.checkinBehavior.sleep)}
+        ${metric('Alimentação', report.checkinBehavior.food)}
+        ${metric('Dificuldade', report.checkinBehavior.difficulty)}
+        ${metric('Vitória', report.checkinBehavior.victory)}
+      </div>
+    </section>
+
+    <section>
+      <h2>5. Hidratação</h2>
+      <div class="grid">
+        ${metric('Meta diária', `${report.hydration.goal} litros`)}
+        ${metric('Consumido hoje', `${report.hydration.consumed} litros`)}
+        ${metric('Progresso', `${report.hydration.progress}%`)}
+        ${metric('Status da meta', report.hydration.status)}
+      </div>
+    </section>
+
+    <section>
+      <h2>6. Jornada e plano</h2>
+      <div class="grid">
+        ${metric('Dia da jornada', `Dia ${report.journey.day} de 90`)}
+        ${metric('Score geral', `${report.journey.score}/100`)}
+        ${metric('Fase atual', report.journey.phase)}
+        ${metric('Conquistas ativas', report.journey.activeAchievements)}
+        ${metric('Periodização ativa', report.periodization.active)}
+        ${metric('Duração', report.periodization.duration)}
+      </div>
+    </section>
+
+    <section>
+      <h2>7. Financeiro</h2>
+      <div class="grid">
+        ${metric('Status financeiro', report.financial.summary)}
+        ${metric('Próximo vencimento', report.financial.dueDate)}
+        ${metric('Situação', report.financial.status)}
+      </div>
+    </section>
+
+    <section>
+      <h2>8. Pontos positivos</h2>
+      ${list(report.positives, '✓')}
+    </section>
+
+    <section>
+      <h2>9. Pontos de atenção</h2>
+      ${list(report.attentionPoints, '!')}
+    </section>
+
+    <section>
+      <h2>10. Próxima ação recomendada</h2>
+      <p>${escapeHtml(report.nextAction)}</p>
+    </section>
+
+    <div class="footer">Gerado pelo PersonalPro Evolution</div>
+  </main>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 function getStudentContactPhone(student?: Student | null) {
