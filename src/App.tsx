@@ -422,6 +422,173 @@ function getCheckInPhotoUrl(checkIn: CheckIn) {
   return String(recordField(checkIn, ['photoUrl', 'photo_url', 'photo']) ?? '');
 }
 
+type IntelligentRisk = 'Baixo' | 'Médio' | 'Alto';
+
+interface IntelligentAnalysisResult {
+  risk: IntelligentRisk;
+  riskBadge: string;
+  headline: string;
+  summary: string;
+  insights: string[];
+  recommendedAction: string;
+  metrics: { label: string; value: string | number }[];
+}
+
+function buildIntelligentAnalysis(
+  data: AppData,
+  student?: Student,
+  waterRecords: { studentId: string; date: string; waterGoal: number; waterConsumed: number }[] = [],
+  mode: 'admin' | 'student' = 'admin'
+): IntelligentAnalysisResult {
+  if (!student) {
+    const studentsWithoutCheckIn = data.students.filter((item) => !data.checkIns.some((checkIn) => checkIn.studentId === item.id)).length;
+    const inactiveStudents = data.students.filter((item) => {
+      const latestLog = workoutLogsForStudent(data, item.id)[0];
+      const inactiveDays = latestLog ? Number(daysSince(getWorkoutLogCompletedAt(latestLog))) : Number.POSITIVE_INFINITY;
+      return inactiveDays > 7;
+    }).length;
+    const pendingPayments = data.payments.filter((payment) => payment.status !== 'pago').length;
+    const hasEnoughData = data.students.length > 0 && (data.workoutLogs.length > 0 || data.checkIns.length > 0 || data.assessments.length > 0);
+
+    return {
+      risk: inactiveStudents > 0 || studentsWithoutCheckIn > 0 ? 'Médio' : 'Baixo',
+      riskBadge: inactiveStudents > 0 || studentsWithoutCheckIn > 0 ? '🟡 Médio' : '🟢 Baixo',
+      headline: hasEnoughData ? 'Visão inteligente da operação' : 'Dados ainda insuficientes para análise completa.',
+      summary: hasEnoughData
+        ? 'Acompanhe alunos com baixa frequência, check-ins pendentes e próximos contatos prioritários.'
+        : 'Registre avaliação, treino e check-in para gerar insights mais precisos.',
+      insights: hasEnoughData
+        ? [
+            `${inactiveStudents} aluno(s) sem treinar há mais de 7 dias.`,
+            `${studentsWithoutCheckIn} aluno(s) sem check-in registrado.`,
+            `${pendingPayments} pagamento(s) pendente(s) ou atrasado(s).`
+          ]
+        : ['Dados ainda insuficientes para análise completa.'],
+      recommendedAction: inactiveStudents > 0 ? 'Enviar mensagem para alunos sem treino recente.' : 'Manter acompanhamento e reforçar check-ins semanais.',
+      metrics: [
+        { label: 'Alunos', value: data.students.length },
+        { label: 'Treinos concluídos', value: data.workoutLogs.length },
+        { label: 'Check-ins', value: data.checkIns.length },
+        { label: 'Avaliações', value: data.assessments.length }
+      ]
+    };
+  }
+
+  const logs = workoutLogsForStudent(data, student.id);
+  const latestLog = logs[0];
+  const daysWithoutTraining = latestLog ? Number(daysSince(getWorkoutLogCompletedAt(latestLog))) : Number.POSITIVE_INFINITY;
+  const checkIns = data.checkIns.filter((item) => item.studentId === student.id).sort((a, b) => getCheckInDateValue(b).localeCompare(getCheckInDateValue(a)));
+  const latestCheckIn = checkIns[0];
+  const daysWithoutCheckIn = latestCheckIn ? Number(daysSince(getCheckInDateValue(latestCheckIn))) : Number.POSITIVE_INFINITY;
+  const summary = getStudentEvolutionSummary(student, data.assessments);
+  const activePeriodization = data.periodizations.some((item) => item.studentId === student.id && item.status === 'ativo');
+  const today = dateKey(new Date().toISOString());
+  const todayWater = waterRecords.find((record) => record.studentId === student.id && record.date === today);
+  const waterCompleted = Boolean(todayWater && todayWater.waterConsumed >= todayWater.waterGoal);
+  const motivation = Number(latestCheckIn?.motivation ?? 0);
+  const stress = Number(latestCheckIn?.stress ?? 0);
+  const weightDiff = Number((summary.currentWeight - summary.initialWeight).toFixed(1));
+  const bodyFatDiff = Number((summary.currentBodyFat - summary.initialBodyFat).toFixed(1));
+
+  let riskScore = 0;
+  if (!latestLog || daysWithoutTraining > 10) riskScore += 2;
+  else if (daysWithoutTraining > 5) riskScore += 1;
+  if (!latestCheckIn || daysWithoutCheckIn > 10) riskScore += 1;
+  if (motivation && motivation <= 4) riskScore += 2;
+  else if (motivation && motivation <= 6) riskScore += 1;
+  if (stress >= 8) riskScore += 2;
+  else if (stress >= 6) riskScore += 1;
+  if (String(latestCheckIn?.sleep ?? '').toLowerCase().includes('ruim')) riskScore += 1;
+
+  const risk: IntelligentRisk = riskScore >= 4 ? 'Alto' : riskScore >= 2 ? 'Médio' : 'Baixo';
+  const riskBadge = risk === 'Alto' ? '🔴 Alto' : risk === 'Médio' ? '🟡 Médio' : '🟢 Baixo';
+  const insights: string[] = [];
+
+  if (!logs.length && !checkIns.length && !summary.assessmentCount) {
+    insights.push('Dados ainda insuficientes para análise completa. Registre avaliação, treino e check-in para gerar insights mais precisos.');
+  }
+  if (!latestLog) insights.push('⚠️ O aluno ainda não possui treino concluído registrado.');
+  else if (daysWithoutTraining > 5) insights.push('⚠️ O aluno está há alguns dias sem registrar treino. Recomenda-se contato rápido para reforçar consistência.');
+  else insights.push('✅ Frequência de treino recente registrada. Mantenha o reforço positivo.');
+
+  if (summary.assessmentCount) {
+    if (weightDiff < 0) insights.push('📈 O aluno apresentou evolução positiva no peso. Reforce o progresso para manter aderência.');
+    else if (weightDiff > 0) insights.push('📌 O peso atual subiu. Vale revisar objetivo, treino, rotina e alimentação.');
+    else insights.push('⚖️ Peso estável nas avaliações. Continue monitorando composição e consistência.');
+    if (summary.currentBodyFat && summary.initialBodyFat && bodyFatDiff < 0) insights.push('🔥 Percentual de gordura em queda. Excelente sinal de evolução corporal.');
+  } else {
+    insights.push('📏 Atualizar avaliação física vai melhorar a precisão da análise.');
+  }
+
+  if (latestCheckIn) {
+    if (motivation && motivation <= 5) insights.push('📉 A motivação recente está baixa. Uma meta curta pode ajudar na retomada.');
+    if (stress >= 7) insights.push('🧠 Estresse elevado no check-in. Ajustar carga e recuperação pode ser importante.');
+    if (latestCheckIn.sleep) insights.push(`😴 Sono relatado: ${latestCheckIn.sleep}.`);
+  } else {
+    insights.push('📋 Solicite um check-in para entender motivação, sono, estresse e dificuldades.');
+  }
+
+  if (waterCompleted) insights.push('💧 Boa hidratação registrada hoje. Isso contribui para consistência e recuperação.');
+  if (activePeriodization) insights.push('📅 Periodização ativa encontrada. Use as fases para orientar os próximos ajustes.');
+
+  const recommendedAction =
+    risk === 'Alto'
+      ? 'Enviar mensagem pelo WhatsApp e alinhar uma meta simples para as próximas 24 horas.'
+      : motivation && motivation <= 5
+        ? 'Reforçar uma meta curta e parabenizar qualquer progresso recente.'
+        : !summary.assessmentCount
+          ? 'Atualizar avaliação física para melhorar o acompanhamento.'
+          : !latestCheckIn
+            ? 'Solicitar novo check-in semanal.'
+            : waterCompleted
+              ? 'Parabenizar hidratação e manter o foco no próximo treino.'
+              : 'Reforçar consistência de treino, check-in e hidratação.';
+
+  if (mode === 'student') {
+    const studentInsights = [
+      logs.length
+        ? 'Você está construindo consistência. Continue registrando seus treinos e check-ins.'
+        : 'Seu progresso começa com pequenos registros. O próximo treino já conta para sua evolução.',
+      summary.assessmentCount
+        ? 'Seu progresso já começou. Pequenas ações diárias vão acelerar sua evolução.'
+        : 'Quando sua avaliação física for registrada, sua evolução ficará mais clara aqui.',
+      waterCompleted
+        ? 'Sua hidratação de hoje está concluída. Ótimo cuidado com recuperação e energia.'
+        : 'Hoje sua meta é simples: registrar água, concluir o treino e responder seu check-in.'
+    ];
+
+    return {
+      risk,
+      riskBadge,
+      headline: 'Seu assistente de evolução',
+      summary: studentInsights[0],
+      insights: studentInsights,
+      recommendedAction: waterCompleted ? 'Mantenha o ritmo e prepare o próximo treino.' : 'Complete uma ação pequena hoje para seguir evoluindo.',
+      metrics: [
+        { label: 'Treinos', value: logs.length },
+        { label: 'Check-ins', value: checkIns.length },
+        { label: 'Avaliações', value: summary.assessmentCount },
+        { label: 'Água hoje', value: waterCompleted ? 'Concluída' : 'Pendente' }
+      ]
+    };
+  }
+
+  return {
+    risk,
+    riskBadge,
+    headline: risk === 'Alto' ? 'Aluno precisa de atenção rápida' : risk === 'Médio' ? 'Acompanhamento recomendado' : 'Aluno em boa condição de acompanhamento',
+    summary: insights[0],
+    insights,
+    recommendedAction,
+    metrics: [
+      { label: 'Treinos concluídos', value: logs.length },
+      { label: 'Dias sem treinar', value: Number.isFinite(daysWithoutTraining) ? daysWithoutTraining : 'Sem treino' },
+      { label: 'Check-ins', value: checkIns.length },
+      { label: 'Motivação', value: motivation ? `${motivation}/10` : 'Sem registro' }
+    ]
+  };
+}
+
 function scrollToTop() {
   window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
 }
@@ -888,6 +1055,15 @@ function AdminDashboard({
     currentStudent &&
       (selectedWorkoutLogs.length || selectedCheckIns.length || selectedPayments.length || selectedPeriodization || selectedAssessments.length || evolutionSummary?.initialWeight || evolutionSummary?.currentWeight)
   );
+  const selectedHasAssessment = Boolean(evolutionSummary?.assessmentCount);
+  const selectedHasRecentCheckIn = Boolean(selectedCheckIns[0] && Number(daysSince(selectedCheckIns[0].date)) <= 10);
+  const selectedHasWorkout = selectedWorkoutLogs.length > 0;
+  const selectedMissingSignals = [!selectedHasAssessment, !selectedHasRecentCheckIn, !selectedHasWorkout].filter(Boolean).length;
+  const selectedAbandonmentRisk = selectedMissingSignals >= 3 ? '🔴 Alto' : selectedMissingSignals >= 1 ? '🟡 Médio' : '🟢 Baixo';
+  const selectedStudentPhone = String(currentStudent?.phone || '').replace(/\D/g, '');
+  const selectedStudentWhatsAppUrl = selectedStudentPhone
+    ? `https://wa.me/${selectedStudentPhone}?text=${encodeURIComponent(`Olá, ${currentStudent ? studentDisplayName(currentStudent) : 'aluno'}! Passando para acompanhar sua evolução no PersonalPro Evolution.`)}`
+    : '';
   const inactiveWorkoutAlerts = data.students
     .map((student) => {
       const latestLog = workoutLogsForStudent(data, student.id)[0];
@@ -951,6 +1127,53 @@ function AdminDashboard({
                   <InfoBox label="Periodização ativa" value={selectedPeriodization ? `${selectedPeriodization.weeks} semanas` : 'Sem periodização ativa'} />
                 </div>
 
+                <Panel title="🤖 Análise Inteligente do Aluno">
+                  <div className="rounded-xl border border-fitblue/40 bg-[linear-gradient(135deg,rgba(56,189,248,.14),rgba(34,197,94,.08),rgba(13,23,38,.94))] p-4 shadow-[0_18px_44px_rgba(14,165,233,0.14)]">
+                    <p className="text-sm font-semibold text-slate-300">Leitura automática dos dados recentes do aluno selecionado.</p>
+                    <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_.9fr]">
+                      <div className="space-y-3">
+                        <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-3">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Status geral</p>
+                          <p className="mt-2 text-base font-semibold text-white">Aluno em acompanhamento ativo.</p>
+                        </div>
+                        <div className="rounded-lg border border-line bg-ink/45 p-3">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">Risco de abandono</p>
+                          <p className="mt-2 text-2xl font-black text-white">{selectedAbandonmentRisk}</p>
+                        </div>
+                        <div className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Próxima ação recomendada</p>
+                          <p className="mt-2 text-sm leading-6 text-slate-100">Enviar mensagem de incentivo e reforçar a meta da semana.</p>
+                          {selectedStudentWhatsAppUrl ? (
+                            <a className="btn-secondary mt-3 w-full sm:w-auto" href={selectedStudentWhatsAppUrl} target="_blank" rel="noopener noreferrer">
+                              💬 Falar com o aluno
+                            </a>
+                          ) : (
+                            <p className="mt-3 rounded-md border border-line bg-ink/50 px-3 py-2 text-sm font-semibold text-slate-300">Telefone do aluno não cadastrado</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-1">
+                        <div className="rounded-lg border border-fitgreen/25 bg-fitgreen/10 p-3">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Pontos positivos</p>
+                          <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
+                            <p>{selectedHasAssessment ? '✅ Avaliação física registrada' : '✅ Cadastro do aluno disponível'}</p>
+                            <p>{selectedHasRecentCheckIn ? '✅ Check-in respondido recentemente' : '✅ Acompanhamento pronto para receber check-ins'}</p>
+                            <p>{selectedPeriodization ? '✅ Periodização ativa' : '✅ Plano pode ser estruturado por periodização'}</p>
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-fitorange/25 bg-fitorange/10 p-3">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitorange">Pontos de atenção</p>
+                          <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
+                            <p>{selectedHasWorkout ? '⚠️ Verificar frequência de treino' : '⚠️ Nenhum treino concluído registrado'}</p>
+                            <p>{selectedHasRecentCheckIn ? '⚠️ Acompanhar hidratação' : '⚠️ Aluno está sem check-in recente'}</p>
+                            {!selectedHasAssessment && <p>⚠️ Aluno ainda não possui avaliação física registrada.</p>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Panel>
+
                 <Panel title="Peso e gordura do aluno">
                   <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
                     {dashboardEvolutionMetrics.map((metric) => (
@@ -1005,7 +1228,14 @@ function AdminDashboard({
             )}
           </Stack>
         ) : (
-          <Empty title="Nenhum aluno selecionado" text="Selecione um aluno no seletor superior para ver o resumo individual." />
+          <Stack>
+            <Empty title="Nenhum aluno selecionado" text="Selecione um aluno no seletor superior para ver o resumo individual." />
+            <Panel title="🤖 Análise Inteligente Geral">
+              <div className="rounded-xl border border-fitblue/40 bg-[linear-gradient(135deg,rgba(56,189,248,.14),rgba(13,23,38,.94))] p-4">
+                <p className="text-base font-semibold text-white">Selecione um aluno para visualizar a análise inteligente.</p>
+              </div>
+            </Panel>
+          </Stack>
         )}
       </Panel>
 
@@ -1043,6 +1273,107 @@ function AdminDashboard({
       </Panel>
     </Stack>
     </div>
+  );
+}
+
+function IntelligentAnalysisCard({
+  data,
+  student,
+  mode,
+  waterRecords = []
+}: {
+  data: AppData;
+  student?: Student;
+  mode: 'admin' | 'student';
+  waterRecords?: { studentId: string; date: string; waterGoal: number; waterConsumed: number }[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const analysis = buildIntelligentAnalysis(data, student, waterRecords, mode);
+  const positiveInsights = analysis.insights.filter((insight) => /✅|📈|🔥|💧|📅|⚖️|frequência|Periodização ativa|Boa hidratação/i.test(insight));
+  const attentionInsights = analysis.insights.filter((insight) => !positiveInsights.includes(insight));
+  const visiblePositiveInsights = expanded ? positiveInsights : positiveInsights.slice(0, 3);
+  const visibleAttentionInsights = expanded ? attentionInsights : attentionInsights.slice(0, 3);
+  const riskClass =
+    analysis.risk === 'Alto'
+      ? 'border-red-400/40 bg-red-500/10 text-red-200'
+      : analysis.risk === 'Médio'
+        ? 'border-yellow-400/40 bg-yellow-500/10 text-yellow-100'
+        : 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen';
+  const cleanPhone = String(student?.phone || '').replace(/\D/g, '');
+  const whatsappUrl = cleanPhone
+    ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(`Olá, ${studentDisplayName(student)}! Passando para acompanhar sua evolução no PersonalPro Evolution.`)}`
+    : '';
+
+  if (!student) {
+    return (
+      <Panel title="🤖 Análise Inteligente Geral">
+        <div className="rounded-xl border border-fitblue/30 bg-[linear-gradient(135deg,rgba(56,189,248,.12),rgba(13,23,38,.92))] p-4">
+          <p className="text-lg font-black text-white">Selecione um aluno para visualizar a análise inteligente individual.</p>
+          <p className="mt-2 text-sm leading-6 text-slate-300">A análise usa avaliações, treinos, check-ins, água e periodização do aluno selecionado no Dashboard.</p>
+        </div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="🤖 Análise Inteligente do Aluno" action={<Badge label={`Risco: ${analysis.riskBadge}`} />}>
+      <div className="rounded-xl border border-fitblue/30 bg-[linear-gradient(135deg,rgba(56,189,248,.12),rgba(34,197,94,.08),rgba(13,23,38,.92))] p-4 shadow-[0_18px_48px_rgba(14,165,233,0.12)]">
+        <p className="mb-4 text-sm font-semibold text-slate-300">Leitura automática dos dados recentes do aluno selecionado.</p>
+        <div className="grid gap-4 lg:grid-cols-[1.15fr_.85fr]">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.12em] ${riskClass}`}>
+                {analysis.riskBadge}
+              </span>
+              <span className="rounded-full border border-line bg-ink/50 px-3 py-1 text-xs font-semibold text-slate-300">{studentDisplayName(student)}</span>
+            </div>
+            <p className="mt-4 text-xs font-black uppercase tracking-[0.14em] text-fitblue">Status geral</p>
+            <h3 className="mt-2 text-xl font-black text-white sm:text-2xl">{analysis.headline}</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-300 sm:text-base">{analysis.summary}</p>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-fitgreen/25 bg-fitgreen/10 p-3">
+                <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Pontos positivos</p>
+                <div className="mt-3 space-y-2">
+                  {(visiblePositiveInsights.length ? visiblePositiveInsights : ['✅ Existem dados para iniciar o acompanhamento.']).map((insight) => (
+                    <p key={insight} className="text-sm leading-6 text-slate-200">{insight}</p>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-lg border border-fitorange/25 bg-fitorange/10 p-3">
+                <p className="text-xs font-black uppercase tracking-[0.14em] text-fitorange">Pontos de atenção</p>
+                <div className="mt-3 space-y-2">
+                  {(visibleAttentionInsights.length ? visibleAttentionInsights : ['Nenhum ponto crítico encontrado agora.']).map((insight) => (
+                    <p key={insight} className="text-sm leading-6 text-slate-200">{insight}</p>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {analysis.insights.length > 6 && (
+              <button className="btn-secondary mt-3 w-full sm:w-auto" onClick={() => setExpanded(!expanded)}>
+                {expanded ? 'Ocultar análise completa' : 'Ver análise completa'}
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              {analysis.metrics.map((metric) => (
+                <InfoBox key={metric.label} label={metric.label} value={metric.value} />
+              ))}
+            </div>
+            <div className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Próxima ação recomendada</p>
+              <p className="mt-2 text-sm leading-6 text-slate-100">{analysis.recommendedAction}</p>
+              {whatsappUrl && (
+                <a className="btn-secondary mt-3 w-full" href={whatsappUrl} target="_blank" rel="noopener noreferrer">
+                  💬 Chamar no WhatsApp
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
