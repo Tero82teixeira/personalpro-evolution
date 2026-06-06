@@ -142,6 +142,82 @@ const studentTabs: { id: StudentTab; label: string; icon: IconComponent }[] = [
   { id: 'profile', label: 'Perfil', icon: UserRound }
 ];
 
+type AiPlanId = 'basic' | 'premium' | 'pro' | 'admin-test';
+
+type AiUsage = {
+  userId: string;
+  plan: AiPlanId;
+  month: string;
+  used: number;
+  limit: number;
+};
+
+const aiPlans: Record<AiPlanId, { label: string; aiLimit: number }> = {
+  basic: { label: 'Básico', aiLimit: 0 },
+  premium: { label: 'Premium', aiLimit: 100 },
+  pro: { label: 'Pro', aiLimit: 300 },
+  'admin-test': { label: 'Admin/Teste', aiLimit: 9999 }
+};
+
+function currentAiUsageMonth() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function aiUsageStorageKey(userId: string) {
+  return `personalpro:ai-usage:${userId}`;
+}
+
+function normalizeAiUsage(value: Partial<AiUsage> | null | undefined, userId: string): AiUsage {
+  const plan = value?.plan && aiPlans[value.plan] ? value.plan : 'admin-test';
+  const month = currentAiUsageMonth();
+  const used = value?.month === month ? Math.max(0, Number(value?.used ?? 0)) : 0;
+  return {
+    userId,
+    plan,
+    month,
+    used,
+    limit: aiPlans[plan].aiLimit
+  };
+}
+
+function loadAiUsage(userId: string): AiUsage {
+  if (typeof window === 'undefined') return normalizeAiUsage(null, userId);
+  try {
+    // Controle local para versão de teste. Para venda, migrar para Supabase.
+    const parsed = JSON.parse(localStorage.getItem(aiUsageStorageKey(userId)) || 'null') as Partial<AiUsage> | null;
+    const usage = normalizeAiUsage(parsed, userId);
+    localStorage.setItem(aiUsageStorageKey(userId), JSON.stringify(usage));
+    return usage;
+  } catch (error) {
+    console.error('Erro ao carregar controle local de IA:', error);
+    return normalizeAiUsage(null, userId);
+  }
+}
+
+function saveAiUsage(usage: AiUsage) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(aiUsageStorageKey(usage.userId), JSON.stringify(usage));
+}
+
+function getAiUsageSummary(usage: AiUsage) {
+  const remaining = Math.max(0, usage.limit - usage.used);
+  const progress = usage.limit > 0 ? Math.min(100, Math.round((usage.used / usage.limit) * 100)) : 100;
+  const tone = progress >= 90 ? 'red' : progress >= 65 ? 'yellow' : 'green';
+  return {
+    planLabel: aiPlans[usage.plan]?.label ?? usage.plan,
+    remaining,
+    progress,
+    tone,
+    hasAvailableUsage: remaining > 0
+  };
+}
+
+function incrementAiUsage(usage: AiUsage): AiUsage {
+  const normalized = normalizeAiUsage(usage, usage.userId);
+  if (normalized.used >= normalized.limit) return normalized;
+  return { ...normalized, used: normalized.used + 1 };
+}
+
 const emptyStudent: Student = {
   id: '',
   profileId: '',
@@ -1058,6 +1134,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
   const [tab, setTab] = useState<AdminTab>('dashboard');
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState(data.students[0]?.id ?? '');
+  const [aiUsage, setAiUsage] = useState<AiUsage>(() => loadAiUsage(user.id));
   const selectedStudent = data.students.find((student) => student.id === selectedStudentId);
   const handleSelectStudent = (studentId: string) => {
     setSelectedStudentId(studentId);
@@ -1067,6 +1144,16 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
       setSelectedStudentId('');
     }
   }, [data.students, selectedStudentId]);
+  useEffect(() => {
+    setAiUsage(loadAiUsage(user.id));
+  }, [user.id]);
+  const registerAiUsage = () => {
+    setAiUsage((current) => {
+      const nextUsage = incrementAiUsage(current);
+      saveAiUsage(nextUsage);
+      return nextUsage;
+    });
+  };
   const selectTab = (nextTab: AdminTab) => {
     setTab(nextTab);
     setMenuOpen(false);
@@ -1090,7 +1177,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
       </nav>
       <section className="min-w-0">
         {data.students.length > 0 && <StudentSelector students={data.students} value={selectedStudentId} onChange={handleSelectStudent} />}
-        {tab === 'dashboard' && <AdminDashboard data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} />}
+        {tab === 'dashboard' && <AdminDashboard data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} aiUsage={aiUsage} onAiUsageIncrement={registerAiUsage} />}
         {tab === 'students' && <StudentCrud data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} onSelect={handleSelectStudent} commit={commit} />}
         {tab === 'assessments' && selectedStudent && <Assessments data={data} student={selectedStudent} commit={commit} />}
         {tab === 'anamnesis' && selectedStudent && <AnamnesisView data={data} student={selectedStudent} commit={commit} />}
@@ -1183,11 +1270,15 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
 function AdminDashboard({
   data,
   selectedStudentId,
-  selectedStudent
+  selectedStudent,
+  aiUsage,
+  onAiUsageIncrement
 }: {
   data: AppData;
   selectedStudentId: string;
   selectedStudent?: Student;
+  aiUsage: AiUsage;
+  onAiUsageIncrement: () => void;
 }) {
   const [showStudentSummary, setShowStudentSummary] = useState(false);
   const [showWorkoutHistory, setShowWorkoutHistory] = useState(false);
@@ -1225,6 +1316,7 @@ function AdminDashboard({
   const evolutionSummary = currentStudent ? getStudentEvolutionSummary(currentStudent, data.assessments) : undefined;
   const smartReportWaterRecords = loadWaterRecords();
   const smartReport = currentStudent ? buildStudentSmartReport(currentStudent.id, data, smartReportWaterRecords) : null;
+  const aiUsageSummary = getAiUsageSummary(aiUsage);
   const selectedWeeklyGoals = currentStudent ? getStudentWeeklyGoals(dashboardWeeklyGoals, currentStudent.id, data, smartReportWaterRecords) : [];
   const selectedWeeklyGoalSummary = summarizeWeeklyGoals(selectedWeeklyGoals);
   const selectedAssessments = evolutionSummary?.assessments ?? [];
@@ -1287,13 +1379,29 @@ function AdminDashboard({
       <PageTitle title="Dashboard" subtitle="Visão rápida da operação, evolução e pendências dos alunos." />
 
       <Panel title="Resumo geral da operação">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
           <StatCard label="Alunos ativos" value={data.students.length} icon={Users} accent="blue" />
           <StatCard label="Check-ins pendentes" value={pendingCheckinStudents.length} icon={CalendarCheck} accent="orange" />
           <StatCard label="Pagamentos pendentes" value={pendingPaymentItems.length} icon={CreditCard} accent="orange" />
           <StatCard label="Evoluções recentes" value={latest.length} icon={LineChart} accent="green" />
           <StatCard label="Treinos concluídos hoje" value={workoutsToday} icon={Dumbbell} accent="green" />
           <StatCard label="Receita do mês" value={formatCurrency(monthRevenue)} icon={CreditCard} accent="blue" />
+          <div className="rounded-lg border border-fitblue/30 bg-fitblue/10 p-4 shadow-[0_16px_36px_rgba(14,165,233,0.12)]">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-black text-white">🤖 Uso de IA</p>
+              <span className="rounded-full border border-line bg-ink/55 px-2 py-1 text-[11px] font-black text-slate-200">{aiUsageSummary.planLabel}</span>
+            </div>
+            <p className="mt-3 text-2xl font-black text-white">{aiUsage.used} / {aiUsage.limit}</p>
+            <p className="mt-1 text-sm text-slate-300">{aiUsageSummary.remaining} restantes em {aiUsage.month}</p>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-ink/70">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  aiUsageSummary.tone === 'red' ? 'bg-red-400' : aiUsageSummary.tone === 'yellow' ? 'bg-yellow-300' : 'bg-fitgreen'
+                }`}
+                style={{ width: `${aiUsageSummary.progress}%` }}
+              />
+            </div>
+          </div>
         </div>
       </Panel>
 
@@ -1364,7 +1472,7 @@ function AdminDashboard({
 
             <WeeklyGoalsAdminCard data={data} student={currentStudent} waterRecords={smartReportWaterRecords} />
 
-            {showSmartReport && smartReport && <StudentSmartReportPanel report={smartReport} settings={data.personalSettings} />}
+            {showSmartReport && smartReport && <StudentSmartReportPanel report={smartReport} settings={data.personalSettings} aiUsage={aiUsage} onAiUsageIncrement={onAiUsageIncrement} />}
 
             {showStudentSummary && (
               <Stack>
@@ -1593,10 +1701,21 @@ function IntelligentAnalysisCard({
   );
 }
 
-function StudentSmartReportPanel({ report, settings }: { report: StudentSmartReport; settings?: PersonalSettings }) {
+function StudentSmartReportPanel({
+  report,
+  settings,
+  aiUsage,
+  onAiUsageIncrement
+}: {
+  report: StudentSmartReport;
+  settings?: PersonalSettings;
+  aiUsage: AiUsage;
+  onAiUsageIncrement: () => void;
+}) {
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const aiUsageSummary = getAiUsageSummary(aiUsage);
   const studentPhone = getStudentContactPhone(report.student);
   const whatsappUrl = studentPhone
     ? `https://wa.me/${studentPhone}?text=${encodeURIComponent(`Olá, ${studentDisplayName(report.student)}! Analisei sua evolução no PersonalPro Evolution e quero alinhar alguns pontos com você para a próxima semana.`)}`
@@ -1605,6 +1724,10 @@ function StudentSmartReportPanel({ report, settings }: { report: StudentSmartRep
   const bodyFatDiffText = `${report.bodyEvolution.bodyFatDiff > 0 ? '+' : ''}${report.bodyEvolution.bodyFatDiff}%`;
 
   const generateAiStudentReport = async () => {
+    if (!aiUsageSummary.hasAvailableUsage) {
+      setAiError('Limite de análises com IA atingido para este mês.');
+      return;
+    }
     setAiLoading(true);
     setAiError('');
     try {
@@ -1638,6 +1761,7 @@ function StudentSmartReportPanel({ report, settings }: { report: StudentSmartRep
         throw new Error(errorMessage || 'Erro ao gerar análise com IA. Verifique sua chave ou saldo da API.');
       }
       setAiAnalysis(String(result.analysis));
+      onAiUsageIncrement();
     } catch (error) {
       console.error('Erro ao gerar análise com IA:', error);
       setAiError(error instanceof Error ? error.message : 'Erro ao gerar análise com IA. Verifique sua chave ou saldo da API.');
@@ -1674,9 +1798,26 @@ function StudentSmartReportPanel({ report, settings }: { report: StudentSmartRep
               </p>
             </div>
             <div className="flex flex-col gap-2 sm:min-w-[220px]">
-              <button className="btn-primary w-full" onClick={generateAiStudentReport} disabled={aiLoading}>
+              <div className="rounded-lg border border-line bg-ink/50 p-3 text-sm text-slate-200">
+                <p className="font-semibold text-white">IA disponível</p>
+                <p className="mt-1">{aiUsageSummary.remaining} análises restantes este mês</p>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-panel">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      aiUsageSummary.tone === 'red' ? 'bg-red-400' : aiUsageSummary.tone === 'yellow' ? 'bg-yellow-300' : 'bg-fitgreen'
+                    }`}
+                    style={{ width: `${aiUsageSummary.progress}%` }}
+                  />
+                </div>
+              </div>
+              <button className="btn-primary w-full" onClick={generateAiStudentReport} disabled={aiLoading || !aiUsageSummary.hasAvailableUsage}>
                 {aiLoading ? 'Gerando análise com IA...' : '🤖 Gerar análise com IA'}
               </button>
+              {!aiUsageSummary.hasAvailableUsage && (
+                <p className="rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm font-semibold text-red-200">
+                  Limite de análises com IA atingido para este mês.
+                </p>
+              )}
               <button className="btn-secondary w-full" onClick={() => { setAiAnalysis(''); setAiError(''); }} disabled={aiLoading || (!aiAnalysis && !aiError)}>
                 Limpar análise de IA
               </button>
