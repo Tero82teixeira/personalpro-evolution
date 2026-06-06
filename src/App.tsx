@@ -159,7 +159,8 @@ const aiPlans: Record<AiPlanId, { label: string; aiLimit: number }> = {
   'admin-test': { label: 'Admin/Teste', aiLimit: 9999 }
 };
 
-type SubscriptionStatus = 'Ativo' | 'Teste' | 'Vencido' | 'Cancelado' | 'Bloqueado';
+type SubscriptionStatus = 'Ativa' | 'Em teste' | 'Vencida' | 'Cancelada' | 'Bloqueada';
+type SubscriptionPaymentMethod = 'Pix' | 'Cartao de credito' | 'Boleto' | 'Dinheiro' | 'Transferencia' | 'Cortesia' | 'Outro';
 
 type SubscriptionPlan = {
   userId: string;
@@ -168,12 +169,20 @@ type SubscriptionPlan = {
   status: SubscriptionStatus;
   maxStudents: number;
   aiLimit: number;
+  monthlyValue: number;
+  paymentMethod: SubscriptionPaymentMethod;
   startedAt: string;
+  dueDate: string;
   renewsAt: string;
+  nextRenewalDate: string;
+  notes: string;
   isTrial: boolean;
   createdAt: string;
   updatedAt: string;
 };
+
+const subscriptionStatuses: SubscriptionStatus[] = ['Ativa', 'Em teste', 'Vencida', 'Cancelada', 'Bloqueada'];
+const subscriptionPaymentMethods: SubscriptionPaymentMethod[] = ['Pix', 'Cartao de credito', 'Boleto', 'Dinheiro', 'Transferencia', 'Cortesia', 'Outro'];
 
 const subscriptionPlans: Record<AiPlanId, { label: string; price: string; maxStudents: number; aiLimit: number; features: string[] }> = {
   basic: {
@@ -279,15 +288,21 @@ function createSubscriptionPlan(userId: string, planId: AiPlanId = 'admin-test')
   const plan = subscriptionPlans[planId];
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
+  const nextRenewalDate = addMonthsToIsoDate(now, 1);
   return {
     userId,
     planId,
     planName: plan.label,
-    status: 'Ativo',
+    status: planId === 'admin-test' ? 'Em teste' : 'Ativa',
     maxStudents: plan.maxStudents,
     aiLimit: plan.aiLimit,
+    monthlyValue: Number(plan.price.replace(/\D/g, '')) || 0,
+    paymentMethod: planId === 'admin-test' ? 'Cortesia' : 'Pix',
     startedAt: today,
-    renewsAt: addMonthsToIsoDate(now, 1),
+    dueDate: nextRenewalDate,
+    renewsAt: nextRenewalDate,
+    nextRenewalDate,
+    notes: 'Controle manual de assinatura. Integração com pagamento automático será adicionada futuramente.',
     isTrial: planId === 'admin-test',
     createdAt: now.toISOString(),
     updatedAt: now.toISOString()
@@ -298,6 +313,19 @@ function normalizeSubscriptionPlan(value: Partial<SubscriptionPlan> | null | und
   const planId = value?.planId && subscriptionPlans[value.planId] ? value.planId : 'admin-test';
   const plan = subscriptionPlans[planId];
   const fallback = createSubscriptionPlan(userId, planId);
+  const rawStatus = String(value?.status ?? fallback.status);
+  const statusMap: Record<string, SubscriptionStatus> = {
+    Ativo: 'Ativa',
+    Teste: 'Em teste',
+    Vencido: 'Vencida',
+    Cancelado: 'Cancelada',
+    Bloqueado: 'Bloqueada'
+  };
+  const status = subscriptionStatuses.includes(rawStatus as SubscriptionStatus) ? rawStatus as SubscriptionStatus : statusMap[rawStatus] ?? fallback.status;
+  const rawPaymentMethod = String(value?.paymentMethod ?? fallback.paymentMethod);
+  const paymentMethod = subscriptionPaymentMethods.includes(rawPaymentMethod as SubscriptionPaymentMethod) ? rawPaymentMethod as SubscriptionPaymentMethod : fallback.paymentMethod;
+  const dueDate = value?.dueDate || value?.renewsAt || fallback.dueDate;
+  const nextRenewalDate = value?.nextRenewalDate || value?.renewsAt || dueDate;
   return {
     ...fallback,
     ...value,
@@ -306,7 +334,13 @@ function normalizeSubscriptionPlan(value: Partial<SubscriptionPlan> | null | und
     planName: plan.label,
     maxStudents: plan.maxStudents,
     aiLimit: plan.aiLimit,
-    status: value?.status ?? 'Ativo',
+    status,
+    monthlyValue: Number(value?.monthlyValue ?? fallback.monthlyValue),
+    paymentMethod,
+    dueDate,
+    renewsAt: nextRenewalDate,
+    nextRenewalDate,
+    notes: value?.notes ?? fallback.notes,
     isTrial: planId === 'admin-test'
   };
 }
@@ -338,6 +372,48 @@ function applySubscriptionToAiUsage(usage: AiUsage, subscription: SubscriptionPl
   };
   saveAiUsage(nextUsage);
   return nextUsage;
+}
+
+function getSubscriptionDaysRemaining(subscription: SubscriptionPlan) {
+  const referenceDate = subscription.dueDate || subscription.nextRenewalDate || subscription.renewsAt;
+  if (!referenceDate) return 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dueDate = new Date(`${referenceDate}T00:00:00`);
+  if (Number.isNaN(dueDate.getTime())) return 0;
+  return Math.ceil((dueDate.getTime() - today.getTime()) / 86400000);
+}
+
+function getSubscriptionDaysMessage(subscription: SubscriptionPlan) {
+  const daysRemaining = getSubscriptionDaysRemaining(subscription);
+  if (daysRemaining > 0) return `Faltam ${daysRemaining} dias para a renovação.`;
+  if (daysRemaining === 0) return 'Assinatura vence hoje.';
+  return `Assinatura vencida há ${Math.abs(daysRemaining)} dias.`;
+}
+
+function getSubscriptionStatusClass(status: SubscriptionStatus) {
+  if (status === 'Ativa') return 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen';
+  if (status === 'Em teste') return 'border-fitblue/40 bg-fitblue/10 text-fitblue';
+  if (status === 'Cancelada') return 'border-slate-500/40 bg-slate-500/10 text-slate-300';
+  return 'border-red-400/40 bg-red-500/10 text-red-200';
+}
+
+function getSubscriptionAccess(subscription: SubscriptionPlan) {
+  const isAdminTest = subscription.planId === 'admin-test';
+  const isActive = isAdminTest || subscription.status === 'Ativa' || subscription.status === 'Em teste';
+  const isInactive = !isActive;
+  const isHardBlocked = !isAdminTest && (subscription.status === 'Cancelada' || subscription.status === 'Bloqueada');
+  return {
+    isAdminTest,
+    isActive,
+    isInactive,
+    canUseAi: isActive,
+    canCreateStudents: isActive,
+    canExportPdf: isAdminTest || !isHardBlocked,
+    inactiveMessage: isHardBlocked
+      ? 'Assinatura inativa. Regularize para continuar usando o sistema.'
+      : 'Assinatura vencida. Alguns recursos premium podem ser bloqueados.'
+  };
 }
 
 const emptyStudent: Student = {
@@ -1272,11 +1348,17 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
     setSubscriptionPlan(nextSubscription);
     setAiUsage(applySubscriptionToAiUsage(loadAiUsage(user.id), nextSubscription));
   }, [user.id]);
-  const updateSubscriptionPlan = (planId: AiPlanId) => {
-    const nextSubscription = createSubscriptionPlan(user.id, planId);
+  const saveSubscriptionState = (nextSubscription: SubscriptionPlan) => {
     saveSubscriptionPlan(nextSubscription);
     setSubscriptionPlan(nextSubscription);
     setAiUsage((current) => applySubscriptionToAiUsage(current, nextSubscription));
+  };
+  const updateSubscriptionPlan = (planId: AiPlanId) => {
+    const nextSubscription = createSubscriptionPlan(user.id, planId);
+    saveSubscriptionState(nextSubscription);
+  };
+  const updateManualSubscription = (subscription: SubscriptionPlan) => {
+    saveSubscriptionState(normalizeSubscriptionPlan({ ...subscription, updatedAt: new Date().toISOString() }, user.id));
   };
   const registerAiUsage = () => {
     setAiUsage((current) => {
@@ -1324,7 +1406,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
         {tab === 'finance' && <FinanceView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'messages' && <MessagesView data={data} />}
         {tab === 'marketing' && <MarketingView data={data} />}
-        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} subscriptionPlan={subscriptionPlan} aiUsage={aiUsage} onSubscriptionChange={updateSubscriptionPlan} />}
+        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} subscriptionPlan={subscriptionPlan} aiUsage={aiUsage} onSubscriptionChange={updateSubscriptionPlan} onManualSubscriptionSave={updateManualSubscription} />}
         {tab !== 'dashboard' && data.students.length === 0 && ['assessments', 'anamnesis', 'workouts', 'periodization', 'journey', 'evolution'].includes(tab) && (
           <Empty title="Base limpa" text="Cadastre um aluno para usar este módulo." />
         )}
@@ -1491,6 +1573,16 @@ function AdminDashboard({
   const selectedStudentWhatsAppUrl = selectedStudentPhone
     ? `https://wa.me/${selectedStudentPhone}?text=${encodeURIComponent(`Olá, ${currentStudent ? studentDisplayName(currentStudent) : 'aluno'}! Analisei sua evolução no PersonalPro Evolution e quero alinhar alguns pontos com você para a próxima semana.`)}`
     : '';
+  const subscriptionAccess = getSubscriptionAccess(subscriptionPlan);
+  const subscriptionDaysRemaining = getSubscriptionDaysRemaining(subscriptionPlan);
+  const subscriptionDaysMessage = getSubscriptionDaysMessage(subscriptionPlan);
+  const subscriptionStatusClass = getSubscriptionStatusClass(subscriptionPlan.status);
+  const subscriptionAlert =
+    subscriptionAccess.isInactive
+      ? subscriptionAccess.inactiveMessage
+      : subscriptionDaysRemaining <= 5 && subscriptionPlan.planId !== 'admin-test'
+        ? 'Assinatura proxima do vencimento.'
+        : '';
   const inactiveWorkoutAlerts = data.students
     .map((student) => {
       const latestLog = workoutLogsForStudent(data, student.id)[0];
@@ -1522,13 +1614,23 @@ function AdminDashboard({
           <div className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-4 shadow-[0_16px_36px_rgba(34,197,94,0.12)]">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-black text-white">💎 Plano atual</p>
-              <span className="rounded-full border border-fitgreen/40 bg-fitgreen/15 px-2 py-1 text-[11px] font-black text-fitgreen">{subscriptionPlan.status}</span>
+              <span className={`rounded-full border px-2 py-1 text-[11px] font-black ${subscriptionStatusClass}`}>{subscriptionPlan.status}</span>
             </div>
             <p className="mt-3 text-lg font-black text-white">{subscriptionPlan.planName}</p>
             <p className="mt-1 text-sm text-slate-300">Alunos: {data.students.length} / {subscriptionPlan.maxStudents}</p>
             <p className="mt-1 text-sm text-slate-300">IA: {aiUsage.used} / {subscriptionPlan.aiLimit} usadas</p>
             <p className="mt-1 text-xs text-slate-400">Renovação: {formatDate(subscriptionPlan.renewsAt)}</p>
             {subscriptionPlan.planId === 'admin-test' && <p className="mt-2 text-xs font-semibold text-fitgreen">Plano de teste administrativo ativo</p>}
+          </div>
+          <div className="rounded-lg border border-fitblue/30 bg-fitblue/10 p-4 shadow-[0_16px_36px_rgba(14,165,233,0.12)]">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-black text-white">💳 Assinatura</p>
+              <span className={`rounded-full border px-2 py-1 text-[11px] font-black ${subscriptionStatusClass}`}>{subscriptionPlan.status}</span>
+            </div>
+            <p className="mt-3 text-lg font-black text-white">{subscriptionPlan.planName}</p>
+            <p className="mt-1 text-sm text-slate-300">Vencimento: {formatDate(subscriptionPlan.dueDate)}</p>
+            <p className="mt-1 text-sm text-slate-300">{subscriptionDaysMessage}</p>
+            {subscriptionAlert && <p className="mt-2 text-xs font-semibold text-fitorange">{subscriptionAlert}</p>}
           </div>
           <div className="rounded-lg border border-fitblue/30 bg-fitblue/10 p-4 shadow-[0_16px_36px_rgba(14,165,233,0.12)]">
             <div className="flex items-center justify-between gap-2">
@@ -1548,6 +1650,13 @@ function AdminDashboard({
           </div>
         </div>
       </Panel>
+
+      {subscriptionAlert && (
+        <div className={`rounded-xl border p-4 ${subscriptionAccess.isInactive ? 'border-red-400/35 bg-red-500/10' : 'border-fitorange/35 bg-fitorange/10'}`}>
+          <p className={`font-black ${subscriptionAccess.isInactive ? 'text-red-200' : 'text-fitorange'}`}>💳 {subscriptionAlert}</p>
+          <p className="mt-1 text-sm text-slate-300">{subscriptionDaysMessage}</p>
+        </div>
+      )}
 
       <Panel title="Resumo do aluno selecionado">
         {currentStudent ? (
@@ -1616,7 +1725,7 @@ function AdminDashboard({
 
             <WeeklyGoalsAdminCard data={data} student={currentStudent} waterRecords={smartReportWaterRecords} />
 
-            {showSmartReport && smartReport && <StudentSmartReportPanel report={smartReport} settings={data.personalSettings} aiUsage={aiUsage} onAiUsageIncrement={onAiUsageIncrement} />}
+            {showSmartReport && smartReport && <StudentSmartReportPanel report={smartReport} settings={data.personalSettings} aiUsage={aiUsage} subscriptionPlan={subscriptionPlan} onAiUsageIncrement={onAiUsageIncrement} />}
 
             {showStudentSummary && (
               <Stack>
@@ -1849,17 +1958,21 @@ function StudentSmartReportPanel({
   report,
   settings,
   aiUsage,
+  subscriptionPlan,
   onAiUsageIncrement
 }: {
   report: StudentSmartReport;
   settings?: PersonalSettings;
   aiUsage: AiUsage;
+  subscriptionPlan: SubscriptionPlan;
   onAiUsageIncrement: () => void;
 }) {
   const [aiAnalysis, setAiAnalysis] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const aiUsageSummary = getAiUsageSummary(aiUsage);
+  const subscriptionAccess = getSubscriptionAccess(subscriptionPlan);
+  const canGenerateAiReport = aiUsageSummary.hasAvailableUsage && subscriptionAccess.canUseAi;
   const studentPhone = getStudentContactPhone(report.student);
   const whatsappUrl = studentPhone
     ? `https://wa.me/${studentPhone}?text=${encodeURIComponent(`Olá, ${studentDisplayName(report.student)}! Analisei sua evolução no PersonalPro Evolution e quero alinhar alguns pontos com você para a próxima semana.`)}`
@@ -1868,6 +1981,10 @@ function StudentSmartReportPanel({
   const bodyFatDiffText = `${report.bodyEvolution.bodyFatDiff > 0 ? '+' : ''}${report.bodyEvolution.bodyFatDiff}%`;
 
   const generateAiStudentReport = async () => {
+    if (!subscriptionAccess.canUseAi) {
+      setAiError(subscriptionPlan.status === 'Vencida' ? 'IA bloqueada porque sua assinatura esta vencida.' : 'Assinatura inativa. Regularize para continuar usando a IA.');
+      return;
+    }
     if (!aiUsageSummary.hasAvailableUsage) {
       setAiError('Limite de análises com IA atingido para este mês.');
       return;
@@ -1926,9 +2043,14 @@ function StudentSmartReportPanel({
             <InfoBox label="Risco de abandono" value={report.abandonmentRiskBadge} />
             <InfoBox label="Próxima ação" value={report.nextAction} />
           </div>
-          <button className="btn-primary mt-4 w-full sm:w-auto" onClick={() => openStudentSmartReportPrint(report, settings)}>
+          <button className="btn-primary mt-4 w-full sm:w-auto" onClick={() => openStudentSmartReportPrint(report, settings)} disabled={!subscriptionAccess.canExportPdf}>
             📄 Exportar PDF
           </button>
+          {!subscriptionAccess.canExportPdf && (
+            <p className="mt-3 rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm font-semibold text-red-200">
+              Assinatura inativa. Regularize para exportar PDF.
+            </p>
+          )}
         </div>
 
         <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-4">
@@ -1954,9 +2076,14 @@ function StudentSmartReportPanel({
                   />
                 </div>
               </div>
-              <button className="btn-primary w-full" onClick={generateAiStudentReport} disabled={aiLoading || !aiUsageSummary.hasAvailableUsage}>
+              <button className="btn-primary w-full" onClick={generateAiStudentReport} disabled={aiLoading || !canGenerateAiReport}>
                 {aiLoading ? 'Gerando análise com IA...' : '🤖 Gerar análise com IA'}
               </button>
+              {!subscriptionAccess.canUseAi && (
+                <p className="rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm font-semibold text-red-200">
+                  {subscriptionPlan.status === 'Vencida' ? 'IA bloqueada porque sua assinatura esta vencida.' : 'Assinatura inativa. Regularize para continuar usando a IA.'}
+                </p>
+              )}
               {!aiUsageSummary.hasAvailableUsage && (
                 <p className="rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm font-semibold text-red-200">
                   Limite de análises com IA atingido para este mês.
@@ -2123,6 +2250,8 @@ function StudentCrud({
   const [isCreatingAccess, setIsCreatingAccess] = useState(false);
   const [isEditing, setIsEditing] = useState(true);
   const studentProfiles = data.users.filter((user) => user.role === 'student');
+  const subscriptionAccess = getSubscriptionAccess(subscriptionPlan);
+  const isStudentCreationBlocked = !subscriptionAccess.canCreateStudents;
   const isStudentLimitReached = subscriptionPlan.planId !== 'admin-test' && data.students.length >= subscriptionPlan.maxStudents;
   const handleEditStudent = (student: Student) => {
     setForm({
@@ -2151,6 +2280,11 @@ function StudentCrud({
     setIsEditing(false);
   };
   const startNewStudent = () => {
+    if (isStudentCreationBlocked) {
+      window.alert('Nao e possivel cadastrar novos alunos com assinatura inativa.');
+      onOpenPlans();
+      return;
+    }
     if (isStudentLimitReached) {
       window.alert('Você atingiu o limite de alunos do seu plano. Faça upgrade para continuar cadastrando alunos.');
       onOpenPlans();
@@ -2195,6 +2329,11 @@ function StudentCrud({
     const id = form.id || makeId('s');
     const nextStudent = { ...form, id, email: accessEmail || form.email, initialWeight: Number(form.initialWeight), currentWeight: Number(form.currentWeight) };
     const exists = data.students.some((student) => student.id === id);
+    if (!exists && isStudentCreationBlocked) {
+      window.alert('Nao e possivel cadastrar novos alunos com assinatura inativa.');
+      onOpenPlans();
+      return;
+    }
     if (!exists && isStudentLimitReached) {
       window.alert('Você atingiu o limite de alunos do seu plano. Faça upgrade para continuar cadastrando alunos.');
       onOpenPlans();
@@ -2369,6 +2508,13 @@ Se tiver qualquer dúvida, fale comigo pelo WhatsApp dentro do sistema.`;
           <Plus size={16} /> Novo aluno
         </button>
       </div>
+      {isStudentCreationBlocked && (
+        <div className="rounded-lg border border-red-400/35 bg-red-500/10 p-4">
+          <p className="font-bold text-red-200">Assinatura inativa.</p>
+          <p className="mt-1 text-sm text-slate-300">Nao e possivel cadastrar novos alunos com assinatura inativa.</p>
+          <button className="btn-secondary mt-3 w-full sm:w-auto" onClick={onOpenPlans}>Ver planos</button>
+        </div>
+      )}
       {isStudentLimitReached && (
         <div className="rounded-lg border border-fitorange/35 bg-fitorange/10 p-4">
           <p className="font-bold text-fitorange">Você atingiu o limite de alunos do seu plano.</p>
@@ -3406,13 +3552,15 @@ function PersonalSettingsView({
   commit,
   subscriptionPlan,
   aiUsage,
-  onSubscriptionChange
+  onSubscriptionChange,
+  onManualSubscriptionSave
 }: {
   data: AppData;
   commit: (data: AppData, message?: string) => void;
   subscriptionPlan: SubscriptionPlan;
   aiUsage: AiUsage;
   onSubscriptionChange: (planId: AiPlanId) => void;
+  onManualSubscriptionSave: (subscription: SubscriptionPlan) => void;
 }) {
   const rawSettings = data.personalSettings ?? defaultPersonalSettings;
   const currentSettings = {
@@ -3423,17 +3571,15 @@ function PersonalSettingsView({
   };
   const [form, setForm] = useState<PersonalSettings>(currentSettings);
   const [isEditing, setIsEditing] = useState(false);
+  const [subscriptionForm, setSubscriptionForm] = useState<SubscriptionPlan>(subscriptionPlan);
+  const [isSubscriptionEditing, setIsSubscriptionEditing] = useState(false);
   const [showPlans, setShowPlans] = useState(false);
   const subscriptionUsage = getAiUsageSummary(aiUsage);
   const studentProgress = subscriptionPlan.maxStudents > 0 ? Math.min(100, Math.round((data.students.length / subscriptionPlan.maxStudents) * 100)) : 100;
-  const statusClass =
-    subscriptionPlan.status === 'Ativo'
-      ? 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen'
-      : subscriptionPlan.status === 'Teste'
-        ? 'border-fitblue/40 bg-fitblue/10 text-fitblue'
-        : subscriptionPlan.status === 'Cancelado'
-          ? 'border-slate-500/40 bg-slate-500/10 text-slate-300'
-          : 'border-red-400/40 bg-red-500/10 text-red-200';
+  const statusClass = getSubscriptionStatusClass(subscriptionPlan.status);
+  const subscriptionDaysRemaining = getSubscriptionDaysRemaining(subscriptionPlan);
+  const subscriptionDaysMessage = getSubscriptionDaysMessage(subscriptionPlan);
+  const subscriptionAccess = getSubscriptionAccess(subscriptionPlan);
   const selectSubscriptionPlan = (planId: AiPlanId) => {
     onSubscriptionChange(planId);
     window.alert('Modo teste: alteração de plano simulada. Integração de pagamento será adicionada futuramente.');
@@ -3456,6 +3602,11 @@ function PersonalSettingsView({
     setIsEditing(false);
   }, [data.personalSettings]);
 
+  useEffect(() => {
+    setSubscriptionForm(subscriptionPlan);
+    setIsSubscriptionEditing(false);
+  }, [subscriptionPlan]);
+
   const cancel = () => {
     setForm(currentSettings);
     setIsEditing(false);
@@ -3470,6 +3621,21 @@ function PersonalSettingsView({
     savePersonalSettings(nextSettings);
     commit({ ...data, personalSettings: nextSettings }, 'Configurações atualizadas com sucesso.');
     setIsEditing(false);
+  };
+  const cancelSubscriptionEdit = () => {
+    setSubscriptionForm(subscriptionPlan);
+    setIsSubscriptionEditing(false);
+  };
+  const saveSubscriptionEdit = () => {
+    const nextSubscription = normalizeSubscriptionPlan({
+      ...subscriptionForm,
+      renewsAt: subscriptionForm.nextRenewalDate || subscriptionForm.dueDate,
+      updatedAt: new Date().toISOString()
+    }, subscriptionPlan.userId);
+    onManualSubscriptionSave(nextSubscription);
+    setSubscriptionForm(nextSubscription);
+    setIsSubscriptionEditing(false);
+    window.alert('Assinatura atualizada com sucesso.');
   };
 
   return (
@@ -3563,6 +3729,71 @@ function PersonalSettingsView({
             })}
           </div>
         )}
+        <div className="mt-4 rounded-xl border border-fitblue/30 bg-[linear-gradient(135deg,rgba(56,189,248,.10),rgba(13,23,38,.92))] p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">💳 Assinatura</p>
+              <h3 className="mt-2 text-xl font-black text-white">Controle manual de assinatura</h3>
+              <p className="mt-1 text-sm leading-6 text-slate-300">Controle manual de assinatura. Integracao com pagamento automatico sera adicionada futuramente.</p>
+            </div>
+            <span className={`w-fit rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.12em] ${getSubscriptionStatusClass(subscriptionPlan.status)}`}>{subscriptionPlan.status}</span>
+          </div>
+          <p className={`mt-4 rounded-md border px-3 py-2 text-sm font-semibold ${isSubscriptionEditing ? 'border-fitblue/30 bg-fitblue/10 text-fitblue' : 'border-line bg-ink/40 text-slate-300'}`}>
+            {isSubscriptionEditing ? 'Modo edicao ativo.' : 'Modo visualizacao. Clique em Editar assinatura para alterar os dados.'}
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <InfoBox label="Status da assinatura" value={subscriptionPlan.status} />
+            <InfoBox label="Plano contratado" value={subscriptionPlan.planName} />
+            <InfoBox label="Valor mensal" value={formatCurrency(subscriptionPlan.monthlyValue)} />
+            <InfoBox label="Forma de pagamento" value={subscriptionPlan.paymentMethod} />
+            <InfoBox label="Data de inicio" value={formatDate(subscriptionPlan.startedAt)} />
+            <InfoBox label="Data de vencimento" value={formatDate(subscriptionPlan.dueDate)} />
+            <InfoBox label="Dias restantes" value={subscriptionDaysRemaining} />
+            <InfoBox label="Proxima renovacao" value={formatDate(subscriptionPlan.nextRenewalDate)} />
+          </div>
+          <div className="mt-4">
+            <p className={`rounded-lg border p-3 text-sm font-semibold ${subscriptionAccess.isInactive ? 'border-red-400/30 bg-red-500/10 text-red-200' : 'border-fitgreen/30 bg-fitgreen/10 text-fitgreen'}`}>
+              {subscriptionDaysMessage}
+            </p>
+          </div>
+          {subscriptionPlan.notes && (
+            <p className="mt-3 rounded-lg border border-line bg-ink/45 p-3 text-sm leading-6 text-slate-300">{subscriptionPlan.notes}</p>
+          )}
+          {isSubscriptionEditing && (
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <Select label="Status" value={subscriptionForm.status} onChange={(value) => setSubscriptionForm({ ...subscriptionForm, status: value as SubscriptionStatus })} options={subscriptionStatuses.map((item) => [item, item])} />
+              <Select label="Plano" value={subscriptionForm.planId} onChange={(value) => {
+                const planId = value as AiPlanId;
+                const plan = subscriptionPlans[planId];
+                setSubscriptionForm({
+                  ...subscriptionForm,
+                  planId,
+                  planName: plan.label,
+                  maxStudents: plan.maxStudents,
+                  aiLimit: plan.aiLimit,
+                  monthlyValue: Number(plan.price.replace(/\D/g, '')) || subscriptionForm.monthlyValue
+                });
+              }} options={(Object.keys(subscriptionPlans) as AiPlanId[]).map((planId) => [planId, subscriptionPlans[planId].label])} />
+              <Input label="Valor mensal" type="number" value={String(subscriptionForm.monthlyValue)} onChange={(value) => setSubscriptionForm({ ...subscriptionForm, monthlyValue: Number(value) })} />
+              <Select label="Forma de pagamento" value={subscriptionForm.paymentMethod} onChange={(value) => setSubscriptionForm({ ...subscriptionForm, paymentMethod: value as SubscriptionPaymentMethod })} options={subscriptionPaymentMethods.map((item) => [item, item])} />
+              <Input label="Data de inicio" type="date" value={subscriptionForm.startedAt} onChange={(value) => setSubscriptionForm({ ...subscriptionForm, startedAt: value })} />
+              <Input label="Data de vencimento" type="date" value={subscriptionForm.dueDate} onChange={(value) => setSubscriptionForm({ ...subscriptionForm, dueDate: value, nextRenewalDate: value, renewsAt: value })} />
+              <div className="md:col-span-2">
+                <Textarea label="Observacoes" value={subscriptionForm.notes} onChange={(value) => setSubscriptionForm({ ...subscriptionForm, notes: value })} />
+              </div>
+            </div>
+          )}
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            {isSubscriptionEditing ? (
+              <>
+                <button className="btn-primary w-full sm:w-auto" onClick={saveSubscriptionEdit}>Salvar assinatura</button>
+                <button className="btn-secondary w-full sm:w-auto" onClick={cancelSubscriptionEdit}>Cancelar</button>
+              </>
+            ) : (
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => setIsSubscriptionEditing(true)}>Editar assinatura</button>
+            )}
+          </div>
+        </div>
       </Panel>
       <Panel title="Dados do Personal">
         <p className={`mb-4 rounded-md border px-3 py-2 text-sm font-semibold ${isEditing ? 'border-fitblue/30 bg-fitblue/10 text-fitblue' : 'border-line bg-ink/40 text-slate-300'}`}>
