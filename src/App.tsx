@@ -159,6 +159,53 @@ const aiPlans: Record<AiPlanId, { label: string; aiLimit: number }> = {
   'admin-test': { label: 'Admin/Teste', aiLimit: 9999 }
 };
 
+type SubscriptionStatus = 'Ativo' | 'Teste' | 'Vencido' | 'Cancelado' | 'Bloqueado';
+
+type SubscriptionPlan = {
+  userId: string;
+  planId: AiPlanId;
+  planName: string;
+  status: SubscriptionStatus;
+  maxStudents: number;
+  aiLimit: number;
+  startedAt: string;
+  renewsAt: string;
+  isTrial: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const subscriptionPlans: Record<AiPlanId, { label: string; price: string; maxStudents: number; aiLimit: number; features: string[] }> = {
+  basic: {
+    label: 'Básico',
+    price: 'R$ 49/mês',
+    maxStudents: 10,
+    aiLimit: 0,
+    features: ['Cadastro de alunos', 'Treinos', 'Avaliações', 'Check-ins', 'Controle de água', 'Evolução', 'Relatório normal', 'Sem IA real']
+  },
+  premium: {
+    label: 'Premium',
+    price: 'R$ 97/mês',
+    maxStudents: 30,
+    aiLimit: 100,
+    features: ['Tudo do Básico', 'Análise Inteligente', 'Relatório Inteligente com IA', 'Exportar PDF', 'Metas Semanais', 'WhatsApp', '100 análises IA/mês']
+  },
+  pro: {
+    label: 'Pro',
+    price: 'R$ 147/mês',
+    maxStudents: 80,
+    aiLimit: 300,
+    features: ['Tudo do Premium', 'Até 80 alunos', '300 análises IA/mês', 'Relatórios avançados', 'Prioridade em recursos premium']
+  },
+  'admin-test': {
+    label: 'Plano Teste/Admin',
+    price: 'R$ 0',
+    maxStudents: 9999,
+    aiLimit: 9999,
+    features: ['Todos os recursos liberados', 'IA ilimitada para teste', 'Acesso administrativo']
+  }
+};
+
 function currentAiUsageMonth() {
   return new Date().toISOString().slice(0, 7);
 }
@@ -216,6 +263,81 @@ function incrementAiUsage(usage: AiUsage): AiUsage {
   const normalized = normalizeAiUsage(usage, usage.userId);
   if (normalized.used >= normalized.limit) return normalized;
   return { ...normalized, used: normalized.used + 1 };
+}
+
+function addMonthsToIsoDate(date: Date, months: number) {
+  const nextDate = new Date(date);
+  nextDate.setMonth(nextDate.getMonth() + months);
+  return nextDate.toISOString().slice(0, 10);
+}
+
+function subscriptionStorageKey(userId: string) {
+  return `personalpro:subscription-plan:${userId}`;
+}
+
+function createSubscriptionPlan(userId: string, planId: AiPlanId = 'admin-test'): SubscriptionPlan {
+  const plan = subscriptionPlans[planId];
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  return {
+    userId,
+    planId,
+    planName: plan.label,
+    status: 'Ativo',
+    maxStudents: plan.maxStudents,
+    aiLimit: plan.aiLimit,
+    startedAt: today,
+    renewsAt: addMonthsToIsoDate(now, 1),
+    isTrial: planId === 'admin-test',
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString()
+  };
+}
+
+function normalizeSubscriptionPlan(value: Partial<SubscriptionPlan> | null | undefined, userId: string): SubscriptionPlan {
+  const planId = value?.planId && subscriptionPlans[value.planId] ? value.planId : 'admin-test';
+  const plan = subscriptionPlans[planId];
+  const fallback = createSubscriptionPlan(userId, planId);
+  return {
+    ...fallback,
+    ...value,
+    userId,
+    planId,
+    planName: plan.label,
+    maxStudents: plan.maxStudents,
+    aiLimit: plan.aiLimit,
+    status: value?.status ?? 'Ativo',
+    isTrial: planId === 'admin-test'
+  };
+}
+
+function loadSubscriptionPlan(userId: string): SubscriptionPlan {
+  if (typeof window === 'undefined') return createSubscriptionPlan(userId);
+  try {
+    const parsed = JSON.parse(localStorage.getItem(subscriptionStorageKey(userId)) || 'null') as Partial<SubscriptionPlan> | null;
+    const subscription = normalizeSubscriptionPlan(parsed, userId);
+    localStorage.setItem(subscriptionStorageKey(userId), JSON.stringify(subscription));
+    return subscription;
+  } catch (error) {
+    console.error('Erro ao carregar assinatura local:', error);
+    return createSubscriptionPlan(userId);
+  }
+}
+
+function saveSubscriptionPlan(subscription: SubscriptionPlan) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(subscriptionStorageKey(subscription.userId), JSON.stringify(subscription));
+}
+
+function applySubscriptionToAiUsage(usage: AiUsage, subscription: SubscriptionPlan): AiUsage {
+  const normalized = normalizeAiUsage(usage, usage.userId);
+  const nextUsage = {
+    ...normalized,
+    plan: subscription.planId,
+    limit: subscription.aiLimit
+  };
+  saveAiUsage(nextUsage);
+  return nextUsage;
 }
 
 const emptyStudent: Student = {
@@ -1134,7 +1256,8 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
   const [tab, setTab] = useState<AdminTab>('dashboard');
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState(data.students[0]?.id ?? '');
-  const [aiUsage, setAiUsage] = useState<AiUsage>(() => loadAiUsage(user.id));
+  const [subscriptionPlan, setSubscriptionPlan] = useState<SubscriptionPlan>(() => loadSubscriptionPlan(user.id));
+  const [aiUsage, setAiUsage] = useState<AiUsage>(() => applySubscriptionToAiUsage(loadAiUsage(user.id), loadSubscriptionPlan(user.id)));
   const selectedStudent = data.students.find((student) => student.id === selectedStudentId);
   const handleSelectStudent = (studentId: string) => {
     setSelectedStudentId(studentId);
@@ -1145,11 +1268,19 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
     }
   }, [data.students, selectedStudentId]);
   useEffect(() => {
-    setAiUsage(loadAiUsage(user.id));
+    const nextSubscription = loadSubscriptionPlan(user.id);
+    setSubscriptionPlan(nextSubscription);
+    setAiUsage(applySubscriptionToAiUsage(loadAiUsage(user.id), nextSubscription));
   }, [user.id]);
+  const updateSubscriptionPlan = (planId: AiPlanId) => {
+    const nextSubscription = createSubscriptionPlan(user.id, planId);
+    saveSubscriptionPlan(nextSubscription);
+    setSubscriptionPlan(nextSubscription);
+    setAiUsage((current) => applySubscriptionToAiUsage(current, nextSubscription));
+  };
   const registerAiUsage = () => {
     setAiUsage((current) => {
-      const nextUsage = incrementAiUsage(current);
+      const nextUsage = incrementAiUsage(applySubscriptionToAiUsage(current, subscriptionPlan));
       saveAiUsage(nextUsage);
       return nextUsage;
     });
@@ -1177,8 +1308,8 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
       </nav>
       <section className="min-w-0">
         {data.students.length > 0 && <StudentSelector students={data.students} value={selectedStudentId} onChange={handleSelectStudent} />}
-        {tab === 'dashboard' && <AdminDashboard data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} aiUsage={aiUsage} onAiUsageIncrement={registerAiUsage} />}
-        {tab === 'students' && <StudentCrud data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} onSelect={handleSelectStudent} commit={commit} />}
+        {tab === 'dashboard' && <AdminDashboard data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} aiUsage={aiUsage} subscriptionPlan={subscriptionPlan} onAiUsageIncrement={registerAiUsage} />}
+        {tab === 'students' && <StudentCrud data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} onSelect={handleSelectStudent} commit={commit} subscriptionPlan={subscriptionPlan} onOpenPlans={() => selectTab('settings')} />}
         {tab === 'assessments' && selectedStudent && <Assessments data={data} student={selectedStudent} commit={commit} />}
         {tab === 'anamnesis' && selectedStudent && <AnamnesisView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'workouts' && selectedStudent && (
@@ -1193,7 +1324,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
         {tab === 'finance' && <FinanceView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'messages' && <MessagesView data={data} />}
         {tab === 'marketing' && <MarketingView data={data} />}
-        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} />}
+        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} subscriptionPlan={subscriptionPlan} aiUsage={aiUsage} onSubscriptionChange={updateSubscriptionPlan} />}
         {tab !== 'dashboard' && data.students.length === 0 && ['assessments', 'anamnesis', 'workouts', 'periodization', 'journey', 'evolution'].includes(tab) && (
           <Empty title="Base limpa" text="Cadastre um aluno para usar este módulo." />
         )}
@@ -1272,12 +1403,14 @@ function AdminDashboard({
   selectedStudentId,
   selectedStudent,
   aiUsage,
+  subscriptionPlan,
   onAiUsageIncrement
 }: {
   data: AppData;
   selectedStudentId: string;
   selectedStudent?: Student;
   aiUsage: AiUsage;
+  subscriptionPlan: SubscriptionPlan;
   onAiUsageIncrement: () => void;
 }) {
   const [showStudentSummary, setShowStudentSummary] = useState(false);
@@ -1379,13 +1512,24 @@ function AdminDashboard({
       <PageTitle title="Dashboard" subtitle="Visão rápida da operação, evolução e pendências dos alunos." />
 
       <Panel title="Resumo geral da operação">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
           <StatCard label="Alunos ativos" value={data.students.length} icon={Users} accent="blue" />
           <StatCard label="Check-ins pendentes" value={pendingCheckinStudents.length} icon={CalendarCheck} accent="orange" />
           <StatCard label="Pagamentos pendentes" value={pendingPaymentItems.length} icon={CreditCard} accent="orange" />
           <StatCard label="Evoluções recentes" value={latest.length} icon={LineChart} accent="green" />
           <StatCard label="Treinos concluídos hoje" value={workoutsToday} icon={Dumbbell} accent="green" />
           <StatCard label="Receita do mês" value={formatCurrency(monthRevenue)} icon={CreditCard} accent="blue" />
+          <div className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-4 shadow-[0_16px_36px_rgba(34,197,94,0.12)]">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-black text-white">💎 Plano atual</p>
+              <span className="rounded-full border border-fitgreen/40 bg-fitgreen/15 px-2 py-1 text-[11px] font-black text-fitgreen">{subscriptionPlan.status}</span>
+            </div>
+            <p className="mt-3 text-lg font-black text-white">{subscriptionPlan.planName}</p>
+            <p className="mt-1 text-sm text-slate-300">Alunos: {data.students.length} / {subscriptionPlan.maxStudents}</p>
+            <p className="mt-1 text-sm text-slate-300">IA: {aiUsage.used} / {subscriptionPlan.aiLimit} usadas</p>
+            <p className="mt-1 text-xs text-slate-400">Renovação: {formatDate(subscriptionPlan.renewsAt)}</p>
+            {subscriptionPlan.planId === 'admin-test' && <p className="mt-2 text-xs font-semibold text-fitgreen">Plano de teste administrativo ativo</p>}
+          </div>
           <div className="rounded-lg border border-fitblue/30 bg-fitblue/10 p-4 shadow-[0_16px_36px_rgba(14,165,233,0.12)]">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-black text-white">🤖 Uso de IA</p>
@@ -1954,13 +2098,17 @@ function StudentCrud({
   selectedStudentId,
   selectedStudent,
   commit,
-  onSelect
+  onSelect,
+  subscriptionPlan,
+  onOpenPlans
 }: {
   data: AppData;
   selectedStudentId: string;
   selectedStudent?: Student;
   commit: (data: AppData, message?: string) => void;
   onSelect: (id: string) => void;
+  subscriptionPlan: SubscriptionPlan;
+  onOpenPlans: () => void;
 }) {
   const [form, setForm] = useState<Student>(emptyStudent);
   const [accessEmail, setAccessEmail] = useState('');
@@ -1975,6 +2123,7 @@ function StudentCrud({
   const [isCreatingAccess, setIsCreatingAccess] = useState(false);
   const [isEditing, setIsEditing] = useState(true);
   const studentProfiles = data.users.filter((user) => user.role === 'student');
+  const isStudentLimitReached = subscriptionPlan.planId !== 'admin-test' && data.students.length >= subscriptionPlan.maxStudents;
   const handleEditStudent = (student: Student) => {
     setForm({
       ...emptyStudent,
@@ -2002,6 +2151,11 @@ function StudentCrud({
     setIsEditing(false);
   };
   const startNewStudent = () => {
+    if (isStudentLimitReached) {
+      window.alert('Você atingiu o limite de alunos do seu plano. Faça upgrade para continuar cadastrando alunos.');
+      onOpenPlans();
+      return;
+    }
     onSelect('');
     setForm({ ...emptyStudent });
     setAccessEmail('');
@@ -2041,6 +2195,11 @@ function StudentCrud({
     const id = form.id || makeId('s');
     const nextStudent = { ...form, id, email: accessEmail || form.email, initialWeight: Number(form.initialWeight), currentWeight: Number(form.currentWeight) };
     const exists = data.students.some((student) => student.id === id);
+    if (!exists && isStudentLimitReached) {
+      window.alert('Você atingiu o limite de alunos do seu plano. Faça upgrade para continuar cadastrando alunos.');
+      onOpenPlans();
+      return;
+    }
     try {
       const remoteId = await saveStudentRemote(nextStudent);
       const savedStudent = { ...nextStudent, id: remoteId ?? nextStudent.id };
@@ -2210,6 +2369,13 @@ Se tiver qualquer dúvida, fale comigo pelo WhatsApp dentro do sistema.`;
           <Plus size={16} /> Novo aluno
         </button>
       </div>
+      {isStudentLimitReached && (
+        <div className="rounded-lg border border-fitorange/35 bg-fitorange/10 p-4">
+          <p className="font-bold text-fitorange">Você atingiu o limite de alunos do seu plano.</p>
+          <p className="mt-1 text-sm text-slate-300">Faça upgrade para continuar cadastrando alunos.</p>
+          <button className="btn-secondary mt-3 w-full sm:w-auto" onClick={onOpenPlans}>Ver planos</button>
+        </div>
+      )}
       <Panel key={form.id || 'new-student'} title={form.id ? `Aluno: ${studentDisplayName(form) || studentDisplayName(selectedStudent)}` : 'Novo aluno'}>
         {form.id && <FormModeNotice editing={isEditing} />}
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -3235,7 +3401,19 @@ function FinanceView({ data, student, commit }: { data: AppData; student?: Stude
   );
 }
 
-function PersonalSettingsView({ data, commit }: { data: AppData; commit: (data: AppData, message?: string) => void }) {
+function PersonalSettingsView({
+  data,
+  commit,
+  subscriptionPlan,
+  aiUsage,
+  onSubscriptionChange
+}: {
+  data: AppData;
+  commit: (data: AppData, message?: string) => void;
+  subscriptionPlan: SubscriptionPlan;
+  aiUsage: AiUsage;
+  onSubscriptionChange: (planId: AiPlanId) => void;
+}) {
   const rawSettings = data.personalSettings ?? defaultPersonalSettings;
   const currentSettings = {
     ...defaultPersonalSettings,
@@ -3245,6 +3423,21 @@ function PersonalSettingsView({ data, commit }: { data: AppData; commit: (data: 
   };
   const [form, setForm] = useState<PersonalSettings>(currentSettings);
   const [isEditing, setIsEditing] = useState(false);
+  const [showPlans, setShowPlans] = useState(false);
+  const subscriptionUsage = getAiUsageSummary(aiUsage);
+  const studentProgress = subscriptionPlan.maxStudents > 0 ? Math.min(100, Math.round((data.students.length / subscriptionPlan.maxStudents) * 100)) : 100;
+  const statusClass =
+    subscriptionPlan.status === 'Ativo'
+      ? 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen'
+      : subscriptionPlan.status === 'Teste'
+        ? 'border-fitblue/40 bg-fitblue/10 text-fitblue'
+        : subscriptionPlan.status === 'Cancelado'
+          ? 'border-slate-500/40 bg-slate-500/10 text-slate-300'
+          : 'border-red-400/40 bg-red-500/10 text-red-200';
+  const selectSubscriptionPlan = (planId: AiPlanId) => {
+    onSubscriptionChange(planId);
+    window.alert('Modo teste: alteração de plano simulada. Integração de pagamento será adicionada futuramente.');
+  };
 
   useEffect(() => {
     const nextSettings = {
@@ -3282,6 +3475,95 @@ function PersonalSettingsView({ data, commit }: { data: AppData; commit: (data: 
   return (
     <Stack>
       <PageTitle title="⚙️ Configurações do Personal" subtitle="Personalize seus dados profissionais e informações de contato." />
+      <Panel title="💎 Plano e Assinatura">
+        <div className="grid gap-3 lg:grid-cols-[1fr_.9fr]">
+          <div className="rounded-xl border border-fitblue/30 bg-fitblue/10 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Plano atual</p>
+                <h3 className="mt-2 text-2xl font-black text-white">{subscriptionPlan.planName}</h3>
+              </div>
+              <span className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.12em] ${statusClass}`}>{subscriptionPlan.status}</span>
+            </div>
+            {subscriptionPlan.planId === 'admin-test' && (
+              <p className="mt-3 rounded-lg border border-fitgreen/25 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">Plano de teste administrativo ativo</p>
+            )}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <InfoBox label="Limite de alunos" value={subscriptionPlan.maxStudents} />
+              <InfoBox label="Alunos cadastrados" value={data.students.length} />
+              <InfoBox label="Limite de análises IA/mês" value={subscriptionPlan.aiLimit} />
+              <InfoBox label="Análises IA usadas no mês" value={aiUsage.used} />
+              <InfoBox label="Análises IA restantes" value={subscriptionUsage.remaining} />
+              <InfoBox label="Mês de referência" value={aiUsage.month} />
+              <InfoBox label="Início do plano" value={formatDate(subscriptionPlan.startedAt)} />
+              <InfoBox label="Renovação" value={formatDate(subscriptionPlan.renewsAt)} />
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div>
+                <p className="mb-2 text-sm font-semibold text-slate-200">Uso de alunos</p>
+                <div className="h-2 overflow-hidden rounded-full bg-ink/70">
+                  <div className="h-full rounded-full bg-fitgreen transition-all" style={{ width: `${studentProgress}%` }} />
+                </div>
+              </div>
+              <div>
+                <p className="mb-2 text-sm font-semibold text-slate-200">Uso de IA</p>
+                <div className="h-2 overflow-hidden rounded-full bg-ink/70">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      subscriptionUsage.tone === 'red' ? 'bg-red-400' : subscriptionUsage.tone === 'yellow' ? 'bg-yellow-300' : 'bg-fitgreen'
+                    }`}
+                    style={{ width: `${subscriptionUsage.progress}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <button className="btn-primary w-full sm:w-auto" onClick={() => setShowPlans(!showPlans)}>
+                {showPlans ? 'Ocultar planos disponíveis' : 'Ver planos disponíveis'}
+              </button>
+              {subscriptionPlan.planId !== 'admin-test' && (
+                <button className="btn-secondary w-full sm:w-auto" onClick={() => selectSubscriptionPlan('admin-test')}>Voltar para Teste/Admin</button>
+              )}
+            </div>
+            <p className="mt-4 text-sm leading-6 text-slate-300">Esta é uma versão de teste. A cobrança real será integrada em uma etapa futura.</p>
+            <p className="mt-1 text-sm leading-6 text-slate-300">Os limites ajudam a controlar custos de IA e organizar os planos do sistema.</p>
+          </div>
+
+          <div className="rounded-xl border border-line bg-ink/45 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Recursos do plano atual</p>
+            <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
+              {subscriptionPlans[subscriptionPlan.planId].features.map((feature) => (
+                <p key={feature}>✅ {feature}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {showPlans && (
+          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            {(['basic', 'premium', 'pro'] as AiPlanId[]).map((planId) => {
+              const plan = subscriptionPlans[planId];
+              const highlighted = planId === 'premium' || planId === 'pro';
+              return (
+                <div key={planId} className={`rounded-xl border p-4 ${highlighted ? 'border-fitblue/35 bg-fitblue/10 shadow-[0_18px_44px_rgba(14,165,233,0.12)]' : 'border-line bg-ink/45'}`}>
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">{plan.label}</p>
+                  <p className="mt-2 text-3xl font-black text-white">{plan.price}</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <InfoBox label="Alunos" value={plan.maxStudents} />
+                    <InfoBox label="IA/mês" value={plan.aiLimit} />
+                  </div>
+                  <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
+                    {plan.features.map((feature) => <p key={feature}>• {feature}</p>)}
+                  </div>
+                  <button className="btn-primary mt-4 w-full" onClick={() => selectSubscriptionPlan(planId)}>
+                    Selecionar plano
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
       <Panel title="Dados do Personal">
         <p className={`mb-4 rounded-md border px-3 py-2 text-sm font-semibold ${isEditing ? 'border-fitblue/30 bg-fitblue/10 text-fitblue' : 'border-line bg-ink/40 text-slate-300'}`}>
           {isEditing ? 'Modo edição ativo.' : 'Modo visualização. Clique em Editar configurações para alterar os dados.'}
