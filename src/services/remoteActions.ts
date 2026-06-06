@@ -333,3 +333,37 @@ export async function linkStudentProfileRemote(studentId: string, profileId: str
   const { error } = await requireSupabase().from('students').update({ profile_id: profileId }).eq('id', studentId);
   if (error) throw error;
 }
+
+export async function createStudentAccessRemote({
+  studentId,
+  email,
+  password,
+  fullName
+}: {
+  studentId: string;
+  email: string;
+  password: string;
+  fullName: string;
+}): Promise<{ profileId: string; studentId: string; email: string; message?: string }> {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase não configurado. A criação de acesso Auth exige Supabase.');
+  }
+  const { data, error } = await requireSupabase().auth.getSession();
+  if (error) throw error;
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Sessão não encontrada. Entre como Personal/Admin novamente.');
+
+  const response = await fetch('/api/create-student-access', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ studentId, email, password, fullName })
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(body.error || 'Não foi possível criar o acesso do aluno.'));
+  }
+  return body;
+}

@@ -22,6 +22,7 @@ import {
   deletePeriodizationRemote,
   deleteStudentRemote,
   deleteWorkoutRemote,
+  createStudentAccessRemote,
   findStudentByEmail,
   findStudentProfileByEmail,
   linkStudentProfileRemote,
@@ -876,10 +877,11 @@ function App() {
     }
   };
 
-  const register = async (name: string, email: string, password: string, role: User['role']) => {
+  const register = async (name: string, email: string, password: string, _role: User['role']) => {
+    const accountRole: User['role'] = 'admin';
     if (isSupabaseConfigured()) {
       try {
-        await authService.signUp(name, email, password, role);
+        await authService.signUp(name, email, password, accountRole);
         setToast('Cadastro criado. Verifique seu e-mail se a confirmação estiver ativa no Supabase.');
         setAuthMode('login');
       } catch (error) {
@@ -891,27 +893,10 @@ function App() {
       setToast('Este e-mail já está cadastrado.');
       return;
     }
-    const studentId = role === 'student' ? makeId('s') : undefined;
     const next: AppData = {
       ...data,
-      users: [...data.users, { id: makeId('u'), name, email, password, role, studentId }],
-      students:
-        role === 'student'
-          ? [
-              ...data.students,
-              {
-                ...emptyStudent,
-                id: studentId!,
-                fullName: name,
-                email,
-                status: 'pendente',
-                goal: 'Definir objetivo',
-                target: 'Cadastrar meta',
-                plan: 'Sem plano',
-                startDate: new Date().toISOString().slice(0, 10)
-              }
-            ]
-          : data.students
+      users: [...data.users, { id: makeId('u'), name, email, password, role: accountRole }],
+      students: data.students
     };
     commit(next, 'Cadastro criado. Você já pode entrar.');
     setAuthMode('login');
@@ -969,11 +954,10 @@ function AuthScreen({
   onRecover: (email: string) => Promise<void>;
   toast: string;
 }) {
-  const [role, setRole] = useState<User['role']>('student');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const title = mode === 'login' ? 'Entre com sua conta de Personal ou Aluno.' : mode === 'register' ? 'Criar acesso' : 'Recuperar senha';
+  const title = mode === 'login' ? 'Entrar no sistema' : mode === 'register' ? 'Criar conta de Personal' : 'Recuperar senha';
 
   return (
     <main className="min-h-screen bg-ink text-white">
@@ -990,7 +974,7 @@ function AuthScreen({
               Gestão, treino e progresso no mesmo app.
             </h1>
             <p className="mt-6 max-w-xl text-base leading-7 text-slate-300 sm:text-lg">
-              Entre com sua conta de Personal ou Aluno para acompanhar treinos, check-ins, avaliações e evolução com segurança.
+              Personal gerencia alunos, treinos, check-ins, avaliações e evolução em um só lugar.
             </p>
           </div>
         </section>
@@ -1004,36 +988,34 @@ function AuthScreen({
                 return;
               }
               if (mode === 'login') onLogin(email, password);
-              else onRegister(name, email, password, role);
+              else onRegister(name, email, password, 'admin');
             }}
           >
             <h2 className="text-2xl font-bold">{title}</h2>
             <p className="mt-2 text-sm text-slate-400">
-              {mode === 'recover' ? 'Informe seu e-mail para receber as instruções de recuperação.' : 'Use o e-mail e senha cadastrados no sistema.'}
+              {mode === 'recover'
+                ? 'Informe seu e-mail para receber as instruções de recuperação.'
+                : mode === 'register'
+                  ? 'Crie sua conta de Personal para gerenciar alunos, treinos, avaliações e relatórios.'
+                  : 'Use seus dados de acesso.'}
             </p>
+            {mode !== 'recover' && (
+              <p className="mt-2 rounded-md border border-fitblue/25 bg-fitblue/10 px-3 py-2 text-sm text-slate-200">
+                É aluno? Use o e-mail e senha enviados pelo seu Personal. Alunos recebem acesso diretamente pelo Personal.
+              </p>
+            )}
             {toast && <div className="mt-4 rounded-md border border-fitorange/40 bg-fitorange/10 p-3 text-sm">{toast}</div>}
             <div className="mt-6 space-y-4">
               {mode === 'register' && <Input label="Nome completo" value={name} onChange={setName} required />}
               <Input label="E-mail" type="email" value={email} onChange={setEmail} required />
               {mode !== 'recover' && <Input label="Senha" type="password" value={password} onChange={setPassword} required />}
-              {mode === 'register' && (
-                <Select
-                  label="Tipo de usuário"
-                  value={role}
-                  onChange={(value) => setRole(value as User['role'])}
-                  options={[
-                    ['student', 'Aluno / Cliente'],
-                    ['admin', 'Personal Trainer']
-                  ]}
-                />
-              )}
               <button className="btn-primary w-full" type="submit">
-                {mode === 'login' ? 'Entrar' : mode === 'register' ? 'Cadastrar' : 'Enviar instrução'}
+                {mode === 'login' ? 'Entrar' : mode === 'register' ? 'Criar conta de Personal' : 'Enviar instrução'}
               </button>
             </div>
             <div className="mt-5 flex flex-wrap justify-between gap-3 text-sm text-slate-300">
               <button type="button" onClick={() => setMode(mode === 'register' ? 'login' : 'register')}>
-                {mode === 'register' ? 'Já tenho conta' : 'Criar cadastro'}
+                {mode === 'register' ? 'Já tenho conta' : 'Criar conta de Personal'}
               </button>
               <button type="button" onClick={() => setMode(mode === 'recover' ? 'login' : 'recover')}>
                 {mode === 'recover' ? 'Voltar ao login' : 'Esqueci minha senha'}
@@ -1612,12 +1594,57 @@ function IntelligentAnalysisCard({
 }
 
 function StudentSmartReportPanel({ report, settings }: { report: StudentSmartReport; settings?: PersonalSettings }) {
+  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
   const studentPhone = getStudentContactPhone(report.student);
   const whatsappUrl = studentPhone
     ? `https://wa.me/${studentPhone}?text=${encodeURIComponent(`Olá, ${studentDisplayName(report.student)}! Analisei sua evolução no PersonalPro Evolution e quero alinhar alguns pontos com você para a próxima semana.`)}`
     : '';
   const weightDiffText = `${report.bodyEvolution.weightDiff > 0 ? '+' : ''}${report.bodyEvolution.weightDiff} kg`;
   const bodyFatDiffText = `${report.bodyEvolution.bodyFatDiff > 0 ? '+' : ''}${report.bodyEvolution.bodyFatDiff}%`;
+
+  const generateAiStudentReport = async () => {
+    setAiLoading(true);
+    setAiError('');
+    try {
+      const payload = buildAiStudentReportPayload(report);
+      console.log('Gerando análise IA', { studentName: studentDisplayName(report.student), hasPayload: Boolean(payload) });
+      const response = await fetch('/api/generate-student-ai-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(
+          window.location.port === '5173'
+            ? 'Para testar IA localmente, use npx vercel dev.'
+            : 'Rota de IA não encontrada. Rode com npx vercel dev ou configure a Vercel.'
+        );
+      }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.analysis) {
+        const errorMessage = String(result.error || '');
+        if (response.status === 404) {
+          throw new Error('Rota de IA não encontrada. Rode com npx vercel dev ou configure a Vercel.');
+        }
+        if (errorMessage.toLowerCase().includes('openai_api_key')) {
+          throw new Error('OPENAI_API_KEY não configurada no ambiente.');
+        }
+        if (response.status >= 500 || response.status === 401 || response.status === 403 || response.status === 429) {
+          throw new Error(errorMessage || 'Erro ao gerar análise com IA. Verifique sua chave ou saldo da API.');
+        }
+        throw new Error(errorMessage || 'Erro ao gerar análise com IA. Verifique sua chave ou saldo da API.');
+      }
+      setAiAnalysis(String(result.analysis));
+    } catch (error) {
+      console.error('Erro ao gerar análise com IA:', error);
+      setAiError(error instanceof Error ? error.message : 'Erro ao gerar análise com IA. Verifique sua chave ou saldo da API.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   return (
     <Panel title="📊 Relatório Inteligente do Aluno" action={<Badge label={report.abandonmentRiskBadge} />}>
@@ -1634,6 +1661,34 @@ function StudentSmartReportPanel({ report, settings }: { report: StudentSmartRep
           <button className="btn-primary mt-4 w-full sm:w-auto" onClick={() => openStudentSmartReportPrint(report, settings)}>
             📄 Exportar PDF
           </button>
+        </div>
+
+        <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">🤖 Análise profissional gerada por IA</p>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                {aiAnalysis
+                  ? 'Análise personalizada gerada com base nos dados resumidos do aluno selecionado.'
+                  : 'Clique em Gerar análise com IA para criar uma leitura profissional personalizada.'}
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:min-w-[220px]">
+              <button className="btn-primary w-full" onClick={generateAiStudentReport} disabled={aiLoading}>
+                {aiLoading ? 'Gerando análise com IA...' : '🤖 Gerar análise com IA'}
+              </button>
+              <button className="btn-secondary w-full" onClick={() => { setAiAnalysis(''); setAiError(''); }} disabled={aiLoading || (!aiAnalysis && !aiError)}>
+                Limpar análise de IA
+              </button>
+            </div>
+          </div>
+          {aiLoading && <p className="mt-4 rounded-lg border border-fitblue/20 bg-ink/50 p-3 text-sm font-semibold text-fitblue">Gerando análise com IA...</p>}
+          {aiError && <p className="mt-4 rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">{aiError}</p>}
+          {aiAnalysis && (
+            <div className="mt-4 whitespace-pre-wrap rounded-xl border border-line bg-ink/55 p-4 text-sm leading-7 text-slate-100">
+              {aiAnalysis}
+            </div>
+          )}
         </div>
 
         <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-4">
@@ -1776,6 +1831,7 @@ function StudentCrud({
   const [linkStudentEmail, setLinkStudentEmail] = useState('');
   const [linkProfileEmail, setLinkProfileEmail] = useState('');
   const [linkProfileId, setLinkProfileId] = useState('');
+  const [isCreatingAccess, setIsCreatingAccess] = useState(false);
   const [isEditing, setIsEditing] = useState(true);
   const studentProfiles = data.users.filter((user) => user.role === 'student');
   const handleEditStudent = (student: Student) => {
@@ -1882,25 +1938,66 @@ function StudentCrud({
       window.alert('Não foi possível excluir o aluno. Tente novamente.');
     }
   };
-  const buildAccessMessage = () => {
-    const studentName = form.fullName || 'aluno';
-    const emailForAccess = accessEmail || form.email || linkProfileEmail || '[email do aluno]';
-    const password = accessPassword || '[senha definida]';
+  const buildAccessMessage = (overrides: { studentName?: string; email?: string; password?: string } = {}) => {
+    const studentName = overrides.studentName || form.fullName || 'aluno';
+    const emailForAccess = overrides.email || accessEmail || form.email || linkProfileEmail || '[email do aluno]';
+    const password = overrides.password || accessPassword || '[senha definida]';
     const link = systemLink || getDefaultSystemLink() || '[link do sistema]';
-    return `Olá, ${studentName}! Seu acesso ao app de acompanhamento já está pronto.
+    return `Olá, ${studentName}!
 
-Acesse pelo link:
+Seu acesso ao PersonalPro Evolution foi criado.
+
+Link:
 ${link}
 
-E-mail: ${emailForAccess}
-Senha: ${password}
+E-mail:
+${emailForAccess}
 
-Pelo app você poderá:
-✅ Ver seus treinos
-✅ Acompanhar sua evolução
-✅ Responder seus check-ins semanais
+Senha temporária:
+${password}
 
-Qualquer dúvida, me chama por aqui.`;
+Ao entrar, acompanhe seus treinos, check-ins, evolução, metas semanais e relatório.
+
+Se tiver qualquer dúvida, fale comigo pelo WhatsApp dentro do sistema.`;
+  };
+  const createStudentAccess = async () => {
+    const studentId = form.id;
+    const emailForAccess = (accessEmail || form.email).trim().toLowerCase();
+    const temporaryPassword = accessPassword.trim();
+    if (!studentId) {
+      window.alert('Salve o aluno antes de criar o acesso.');
+      return;
+    }
+    if (!emailForAccess || !emailForAccess.includes('@')) {
+      window.alert('Informe um e-mail de acesso válido para o aluno.');
+      return;
+    }
+    if (temporaryPassword.length < 6) {
+      window.alert('A senha temporária precisa ter pelo menos 6 caracteres.');
+      return;
+    }
+    setIsCreatingAccess(true);
+    try {
+      const result = await createStudentAccessRemote({
+        studentId,
+        email: emailForAccess,
+        password: temporaryPassword,
+        fullName: form.fullName || emailForAccess
+      });
+      const updatedStudent = { ...form, email: result.email || emailForAccess, profileId: result.profileId };
+      commit({
+        ...data,
+        students: data.students.map((student) => (student.id === studentId ? updatedStudent : student))
+      }, 'Acesso do aluno criado com sucesso.');
+      setForm(updatedStudent);
+      setAccessEmail(updatedStudent.email);
+      setAccessMessage(buildAccessMessage({ studentName: updatedStudent.fullName, email: updatedStudent.email, password: temporaryPassword }));
+      setCopyFeedback('');
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Não foi possível criar o acesso do aluno.');
+    } finally {
+      setIsCreatingAccess(false);
+    }
   };
   const generateAccessInstructions = () => {
     setAccessMessage(buildAccessMessage());
@@ -1962,6 +2059,7 @@ Qualquer dúvida, me chama por aqui.`;
       window.alert(error instanceof Error ? error.message : 'Não foi possível vincular o login do aluno.');
     }
   };
+  const accessStatus = form.profileId ? 'Perfil vinculado' : accessMessage ? 'Acesso criado' : 'Sem acesso criado';
 
   return (
     <Stack>
@@ -2009,37 +2107,67 @@ Qualquer dúvida, me chama por aqui.`;
           {form.id && <button className="btn-danger w-full sm:w-auto" onClick={() => deleteStudent(form)}>Excluir aluno</button>}
         </div>
       </Panel>
-      <Panel title="Vincular login do aluno">
-        <div className="grid gap-3 md:grid-cols-3">
-          <Input label="Buscar aluno por e-mail" type="email" value={linkStudentEmail} onChange={setLinkStudentEmail} />
-          <Input label="Buscar profile por e-mail" type="email" value={linkProfileEmail} onChange={setLinkProfileEmail} />
-          <Select
-            label="Ou selecione um profile student"
-            value={linkProfileId}
-            onChange={setLinkProfileId}
-            options={[['', 'Selecionar profile'], ...studentProfiles.map((profile) => [profile.id, `${profile.name || profile.email || profile.id}`] as [string, string])]}
-          />
-        </div>
-        <button className="btn-primary mt-4 w-full sm:w-auto" onClick={linkStudentLogin}>Vincular login do aluno</button>
-      </Panel>
-      <Panel title="Gerar instruções de acesso">
-        <div className="grid gap-3 md:grid-cols-2">
-          <Input label="Link do sistema" value={systemLink} onChange={(value) => { setSystemLink(value); setCopyFeedback(''); }} />
-          <Input label="Senha definida" value={accessPassword} onChange={setAccessPassword} />
-          <button className="btn-secondary self-end" onClick={generateAccessInstructions}>Gerar instruções de acesso</button>
-          {accessMessage && (
-            <label className="block text-sm md:col-span-2">
-              <span className="mb-1 block text-slate-300">Mensagem para WhatsApp</span>
-              <textarea className="field min-h-64 resize-y" value={accessMessage} onChange={(event) => { setAccessMessage(event.target.value); setCopyFeedback(''); }} />
-            </label>
-          )}
-          {accessMessage && (
-            <div className="flex flex-col gap-2 md:col-span-2 sm:flex-row sm:items-center">
-              <button className="btn-secondary w-full sm:w-auto" onClick={copyAccessMessage}>Copiar mensagem</button>
-              <button className="btn-primary w-full sm:w-auto" onClick={sendAccessByWhatsApp}>Enviar pelo WhatsApp</button>
-              {copyFeedback && <span className="text-sm font-semibold text-fitgreen">{copyFeedback}</span>}
+      <Panel title="🔐 Acesso do aluno">
+        <div className="grid gap-3 lg:grid-cols-[0.9fr_1.1fr]">
+          <div className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-4">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Status do acesso</p>
+            <p className="mt-2 text-2xl font-black text-white">{accessStatus}</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              O aluno entra pela tela principal usando o e-mail e senha enviados pelo Personal. Por segurança, este painel gera as instruções e vincula um profile student existente, sem expor chave admin no frontend.
+            </p>
+            <div className="mt-4 grid gap-2 text-sm text-slate-200">
+              <p><span className="font-semibold text-white">Aluno:</span> {form.fullName || 'Selecione ou cadastre um aluno'}</p>
+              <p><span className="font-semibold text-white">E-mail de acesso:</span> {accessEmail || form.email || 'Não definido'}</p>
+              <p><span className="font-semibold text-white">Profile:</span> {form.profileId || 'Sem vínculo'}</p>
             </div>
-          )}
+          </div>
+
+          <div className="grid gap-3">
+            <div className="rounded-lg border border-line bg-ink/45 p-4">
+              <p className="font-bold text-white">Gerar instruções de acesso</p>
+              <p className="mt-1 text-sm text-slate-400">Defina o link e uma senha temporária para montar a mensagem que será enviada ao aluno.</p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <Input label="E-mail de acesso do aluno" type="email" value={accessEmail} onChange={(value) => { setAccessEmail(value); setCopyFeedback(''); }} />
+                <Input label="Senha temporária" value={accessPassword} onChange={(value) => { setAccessPassword(value); setCopyFeedback(''); }} />
+                <Input label="Link do sistema" value={systemLink} onChange={(value) => { setSystemLink(value); setCopyFeedback(''); }} />
+                <button className="btn-primary self-end" onClick={createStudentAccess} disabled={isCreatingAccess || Boolean(form.profileId)}>
+                  {form.profileId ? 'Acesso já vinculado' : isCreatingAccess ? 'Criando acesso...' : 'Criar acesso do aluno'}
+                </button>
+              </div>
+              <button className="btn-secondary mt-3 w-full sm:w-auto" onClick={generateAccessInstructions}>
+                Gerar instruções de acesso
+              </button>
+              {accessMessage && (
+                <label className="mt-3 block text-sm">
+                  <span className="mb-1 block text-slate-300">Mensagem para WhatsApp</span>
+                  <textarea className="field min-h-64 resize-y" value={accessMessage} onChange={(event) => { setAccessMessage(event.target.value); setCopyFeedback(''); }} />
+                </label>
+              )}
+              {accessMessage && (
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <button className="btn-secondary w-full sm:w-auto" onClick={copyAccessMessage}>Copiar instruções de acesso</button>
+                  <button className="btn-primary w-full sm:w-auto" onClick={sendAccessByWhatsApp}>Enviar pelo WhatsApp</button>
+                  {copyFeedback && <span className="text-sm font-semibold text-fitgreen">{copyFeedback}</span>}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-line bg-ink/45 p-4">
+              <p className="font-bold text-white">Vincular acesso existente</p>
+              <p className="mt-1 text-sm text-slate-400">Use quando o usuário aluno já existir no Supabase Authentication e possuir profile com role student.</p>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <Input label="Buscar aluno por e-mail" type="email" value={linkStudentEmail} onChange={setLinkStudentEmail} />
+                <Input label="Buscar profile por e-mail" type="email" value={linkProfileEmail} onChange={setLinkProfileEmail} />
+                <Select
+                  label="Ou selecione um profile student"
+                  value={linkProfileId}
+                  onChange={setLinkProfileId}
+                  options={[['', 'Selecionar profile'], ...studentProfiles.map((profile) => [profile.id, `${profile.name || profile.email || profile.id}`] as [string, string])]}
+                />
+              </div>
+              <button className="btn-primary mt-4 w-full sm:w-auto" onClick={linkStudentLogin}>Vincular acesso existente</button>
+            </div>
+          </div>
         </div>
       </Panel>
       {data.students.length ? <div className="grid gap-3 lg:grid-cols-2">
@@ -4748,6 +4876,34 @@ function openStudentSmartReportPrint(report: StudentSmartReport, settings?: Pers
   printWindow.setTimeout(() => {
     printWindow.print();
   }, 450);
+}
+
+function buildAiStudentReportPayload(report: StudentSmartReport) {
+  return {
+    studentName: studentDisplayName(report.student),
+    goal: report.student.goal || 'Sem objetivo registrado',
+    bodyEvolution: {
+      initialWeight: report.bodyEvolution.initialWeight,
+      currentWeight: report.bodyEvolution.currentWeight,
+      initialBodyFat: report.bodyEvolution.initialBodyFat,
+      currentBodyFat: report.bodyEvolution.currentBodyFat,
+      weightDiff: report.bodyEvolution.weightDiff,
+      bodyFatDiff: report.bodyEvolution.bodyFatDiff
+    },
+    trainingConsistency: {
+      totalWorkouts: report.trainingConsistency.totalWorkouts,
+      monthWorkouts: report.trainingConsistency.monthWorkouts,
+      latestWorkout: report.trainingConsistency.latestWorkout,
+      daysWithoutTraining: report.trainingConsistency.daysWithoutTraining,
+      adherence: report.trainingConsistency.adherence
+    },
+    checkinBehavior: report.checkinBehavior,
+    hydration: report.hydration,
+    weeklyGoals: report.weeklyGoals,
+    abandonmentRisk: report.abandonmentRiskBadge,
+    positives: report.positives,
+    attentionPoints: report.attentionPoints
+  };
 }
 
 function buildStudentSmartReportPrintHtml({

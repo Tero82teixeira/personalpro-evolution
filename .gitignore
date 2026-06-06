@@ -5,3 +5,6 @@ dist/
 .env.*.local
 vite-server.log
 vite-server.err.log
+
+.vercel
+.env*

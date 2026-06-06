@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { isSupabaseConfigured, supabaseConfig } from './config';
+import { getSupabaseConfigError, isSupabaseConfigured, supabaseConfig } from './config';
 
 export const supabase = isSupabaseConfigured()
   ? createClient(supabaseConfig.url, supabaseConfig.anonKey, {
@@ -13,6 +13,10 @@ export const supabase = isSupabaseConfigured()
   : null;
 
 export function requireSupabase() {
+  const configError = getSupabaseConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
   if (!supabase) {
     throw new Error('Supabase não configurado. Usando fallback localStorage.');
   }
