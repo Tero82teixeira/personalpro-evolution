@@ -3926,6 +3926,7 @@ function PersonalSettingsView({
   const [subscriptionForm, setSubscriptionForm] = useState<SubscriptionPlan>(subscriptionPlan);
   const [isSubscriptionEditing, setIsSubscriptionEditing] = useState(false);
   const [showPlans, setShowPlans] = useState(false);
+  const [contractPlanId, setContractPlanId] = useState<AiPlanId | null>(null);
   const [mercadoPagoLoadingPlan, setMercadoPagoLoadingPlan] = useState('');
   const [mercadoPagoPixLoadingPlan, setMercadoPagoPixLoadingPlan] = useState('');
   const [mercadoPagoSubscriptionMessage, setMercadoPagoSubscriptionMessage] = useState('');
@@ -3995,12 +3996,14 @@ function PersonalSettingsView({
       }, subscriptionPlan.userId);
       onManualSubscriptionSave(nextSubscription);
       setSubscriptionForm(nextSubscription);
-      setMercadoPagoSubscriptionMessage('Assinatura criada. Conclua o pagamento no Mercado Pago.');
+      setMercadoPagoSubscriptionMessage('Voce sera redirecionado para concluir a assinatura no Mercado Pago.');
       if (checkoutUrl) {
         window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
       }
+      return true;
     } catch (error) {
       setMercadoPagoSubscriptionError(error instanceof Error ? error.message : 'Nao foi possivel criar a assinatura no Mercado Pago.');
+      return false;
     } finally {
       setMercadoPagoLoadingPlan('');
     }
@@ -4074,8 +4077,10 @@ function PersonalSettingsView({
       onManualSubscriptionSave(nextSubscription);
       setSubscriptionForm(nextSubscription);
       setMercadoPagoPixMessage('Pix gerado com sucesso. Aguarde a confirmacao do pagamento.');
+      return true;
     } catch (error) {
       setMercadoPagoPixError(error instanceof Error ? error.message : 'Nao foi possivel gerar Pix no Mercado Pago.');
+      return false;
     } finally {
       setMercadoPagoPixLoadingPlan('');
     }
@@ -4115,6 +4120,26 @@ function PersonalSettingsView({
     onManualSubscriptionSave(nextSubscription);
     setSubscriptionForm(nextSubscription);
     setMercadoPagoPixMessage('Pix marcado como pago manualmente. Plano ativado por 30 dias.');
+  };
+  const contractPlan = contractPlanId ? subscriptionPlans[contractPlanId] : null;
+  const closeContractPanel = () => {
+    setContractPlanId(null);
+  };
+  const handleContractByCard = async () => {
+    if (!contractPlanId) return;
+    setMercadoPagoSubscriptionMessage('Voce sera redirecionado para concluir a assinatura no Mercado Pago.');
+    const success = await createMercadoPagoSubscription(contractPlanId);
+    if (success) setContractPlanId(null);
+  };
+  const handleContractByPix = async () => {
+    if (!contractPlanId) return;
+    const success = await createMercadoPagoPixPayment(contractPlanId);
+    if (success) setContractPlanId(null);
+  };
+  const handleContractByTestMode = () => {
+    if (!contractPlanId) return;
+    selectSubscriptionPlan(contractPlanId);
+    setContractPlanId(null);
   };
 
   useEffect(() => {
@@ -4257,18 +4282,58 @@ function PersonalSettingsView({
                   <div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">
                     {plan.features.map((feature) => <p key={feature}>• {feature}</p>)}
                   </div>
-                  <button className="btn-primary mt-4 w-full" onClick={() => selectSubscriptionPlan(planId)}>
-                    Selecionar plano
-                  </button>
-                  <button className="btn-secondary mt-2 w-full" onClick={() => createMercadoPagoSubscription(planId)} disabled={mercadoPagoLoadingPlan === planId}>
-                    {mercadoPagoLoadingPlan === planId ? 'Gerando assinatura no Mercado Pago...' : 'Assinar com Mercado Pago'}
-                  </button>
-                  <button className="btn-secondary mt-2 w-full" onClick={() => createMercadoPagoPixPayment(planId)} disabled={mercadoPagoPixLoadingPlan === planId}>
-                    {mercadoPagoPixLoadingPlan === planId ? 'Gerando Pix seguro...' : 'Pagar via Pix'}
+                  <button className="btn-primary mt-4 w-full" onClick={() => setContractPlanId(planId)}>
+                    Contratar plano
                   </button>
                 </div>
               );
             })}
+          </div>
+        )}
+        {contractPlanId && contractPlan && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 backdrop-blur-sm sm:items-center sm:p-6">
+            <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-fitblue/35 bg-[linear-gradient(145deg,rgba(15,23,42,.98),rgba(2,8,23,.96))] p-4 shadow-[0_28px_90px_rgba(14,165,233,.22)] sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Contratacao de plano</p>
+                  <h3 className="mt-2 text-2xl font-black text-white">Contratar Plano {contractPlan.label}</h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-300">Escolha a forma de pagamento ou use o modo teste/manual.</p>
+                </div>
+                <button className="btn-secondary w-full sm:w-auto" onClick={closeContractPanel}>Fechar</button>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <InfoBox label="Preco" value={contractPlan.price} />
+                <InfoBox label="Limite de alunos" value={contractPlan.maxStudents} />
+                <InfoBox label="IA/mes" value={contractPlan.aiLimit} />
+              </div>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                <div className="rounded-xl border border-fitblue/30 bg-fitblue/10 p-4">
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Cartao recorrente</p>
+                  <p className="mt-3 text-sm leading-6 text-slate-200">Assinatura mensal automatica pelo Mercado Pago.</p>
+                  <button className="btn-primary mt-4 w-full" onClick={handleContractByCard} disabled={mercadoPagoLoadingPlan === contractPlanId}>
+                    {mercadoPagoLoadingPlan === contractPlanId ? 'Gerando assinatura no Mercado Pago...' : 'Continuar com cartao'}
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-fitgreen/30 bg-fitgreen/10 p-4">
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Pix mensal</p>
+                  <p className="mt-3 text-sm leading-6 text-slate-200">Gere um Pix para ativar o plano por 30 dias. Renovacao manual.</p>
+                  <button className="btn-primary mt-4 w-full" onClick={handleContractByPix} disabled={mercadoPagoPixLoadingPlan === contractPlanId}>
+                    {mercadoPagoPixLoadingPlan === contractPlanId ? 'Gerando Pix seguro...' : 'Gerar Pix'}
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-line bg-ink/55 p-4">
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-300">Modo teste/manual</p>
+                  <p className="mt-3 text-sm leading-6 text-slate-200">Alterar plano sem cobranca para teste ou controle manual.</p>
+                  <button className="btn-secondary mt-4 w-full" onClick={handleContractByTestMode}>
+                    Selecionar em modo teste
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
         {mercadoPagoPixInfo && (
