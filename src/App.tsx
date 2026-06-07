@@ -116,6 +116,9 @@ type AdminTab =
   | 'marketing'
   | 'settings';
 type StudentTab = 'home' | 'workout' | 'journey' | 'evolution' | 'checkin' | 'profile';
+type SuperAdminTab = 'dashboard' | 'personals' | 'subscriptions' | 'ai' | 'plans' | 'reports';
+
+const OWNER_EMAIL = 'ronaldositeseblogs@gmail.com';
 
 const adminTabs: { id: AdminTab; label: string; icon: IconComponent }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
@@ -140,6 +143,15 @@ const studentTabs: { id: StudentTab; label: string; icon: IconComponent }[] = [
   { id: 'evolution', label: 'Evolução', icon: LineChart },
   { id: 'checkin', label: 'Check-in', icon: CalendarCheck },
   { id: 'profile', label: 'Perfil', icon: UserRound }
+];
+
+const superAdminTabs: { id: SuperAdminTab; label: string; icon: IconComponent }[] = [
+  { id: 'dashboard', label: 'Dashboard Geral', icon: BarChart3 },
+  { id: 'personals', label: 'Personais', icon: Users },
+  { id: 'subscriptions', label: 'Assinaturas', icon: CreditCard },
+  { id: 'ai', label: 'Uso de IA', icon: Sparkles },
+  { id: 'plans', label: 'Planos', icon: ShieldCheck },
+  { id: 'reports', label: 'Relatórios', icon: LineChart }
 ];
 
 type AiPlanId = 'basic' | 'premium' | 'pro' | 'admin-test';
@@ -1082,6 +1094,10 @@ function scrollToTop() {
   window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
 }
 
+function isOwnerUser(user?: User | null) {
+  return Boolean(user && (user.role === 'super_admin' || String(user.email || '').trim().toLowerCase() === OWNER_EMAIL));
+}
+
 const emptyAppData: AppData = {
   users: [],
   students: [],
@@ -1204,7 +1220,9 @@ function App() {
       toast={toast}
       settings={data.personalSettings}
     >
-      {user.role === 'admin' ? (
+      {isOwnerUser(user) ? (
+        <SuperAdminArea user={user} data={data} />
+      ) : user.role === 'admin' ? (
         <AdminArea user={user} data={data} commit={commit} />
       ) : (
         <StudentArea user={user} data={data} commit={commit} />
@@ -1311,7 +1329,7 @@ function Shell({ user, onLogout, toast, settings, children }: { user: User; onLo
             <Logo />
             <div className="min-w-0">
               <p className="truncate font-bold">{settings.brandName || defaultPersonalSettings.brandName}</p>
-              <p className="truncate text-xs text-slate-400">{user.role === 'admin' ? 'Área do Personal' : settings.slogan || 'Área do Aluno'}</p>
+              <p className="truncate text-xs text-slate-400">{isOwnerUser(user) ? 'Área do Dono do Sistema' : user.role === 'admin' ? 'Área do Personal' : settings.slogan || 'Área do Aluno'}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1325,6 +1343,290 @@ function Shell({ user, onLogout, toast, settings, children }: { user: User; onLo
       {toast && <div className="fixed right-4 top-20 z-40 rounded-md border border-fitgreen/40 bg-fitgreen/15 px-4 py-3 text-sm">{toast}</div>}
       {children}
     </main>
+  );
+}
+
+type OwnerPersonalRow = {
+  user: User;
+  subscription: SubscriptionPlan;
+  aiUsage: AiUsage;
+  studentsCount: number;
+  lastAccess: string;
+};
+
+function buildOwnerPersonalRows(data: AppData): OwnerPersonalRow[] {
+  const admins = data.users.filter((item) => item.role === 'admin' && !isOwnerUser(item));
+  const sourceUsers = admins.length ? admins : [
+    { id: 'demo-owner-basic', name: 'Ronaldo Personal', email: 'ronaldo.personal@demo.com', password: '', role: 'admin' as const },
+    { id: 'demo-owner-premium', name: 'Studio Premium', email: 'premium@demo.com', password: '', role: 'admin' as const },
+    { id: 'demo-owner-pro', name: 'Equipe Pro', email: 'pro@demo.com', password: '', role: 'admin' as const }
+  ];
+
+  return sourceUsers.map((admin, index) => {
+    let subscription = loadSubscriptionPlan(admin.id);
+    if (!admins.length && subscription.planId === 'admin-test') {
+      const demoPlanId = (['basic', 'premium', 'pro'] as AiPlanId[])[index] ?? 'premium';
+      subscription = normalizeSubscriptionPlan({
+        ...createSubscriptionPlan(admin.id, demoPlanId),
+        status: index === 0 ? 'Ativa' : index === 1 ? 'Em teste' : 'Vencida',
+        dueDate: addMonthsToIsoDate(new Date(), index === 2 ? -1 : index + 1),
+        nextRenewalDate: addMonthsToIsoDate(new Date(), index === 2 ? -1 : index + 1)
+      }, admin.id);
+      saveSubscriptionPlan(subscription);
+    }
+    const aiUsage = applySubscriptionToAiUsage(loadAiUsage(admin.id), subscription);
+    return {
+      user: admin,
+      subscription,
+      aiUsage,
+      studentsCount: admins.length ? (index === 0 ? data.students.length : 0) : [8, 24, 51][index] ?? 0,
+      lastAccess: index === 0 ? 'Hoje' : index === 1 ? 'Ontem' : 'Sem registro'
+    };
+  });
+}
+
+function SuperAdminArea({ user, data }: { user: User; data: AppData }) {
+  const [tab, setTab] = useState<SuperAdminTab>('dashboard');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedPersonalId, setSelectedPersonalId] = useState('');
+  const [ownerPlans, setOwnerPlans] = useState(() => (['basic', 'premium', 'pro'] as AiPlanId[]).map((planId) => ({
+    id: planId,
+    ...subscriptionPlans[planId],
+    featuresText: subscriptionPlans[planId].features.join('\n')
+  })));
+  const rows = buildOwnerPersonalRows(data);
+  const selectedRow = rows.find((row) => row.user.id === selectedPersonalId) ?? rows[0];
+  const totalAiUsed = rows.reduce((sum, row) => sum + row.aiUsage.used, 0);
+  const activePersonals = rows.filter((row) => getSubscriptionAccess(row.subscription).isActive).length;
+  const expiredSubscriptions = rows.filter((row) => row.subscription.status === 'Vencida').length;
+  const estimatedRevenue = rows
+    .filter((row) => row.subscription.status === 'Ativa' || row.subscription.status === 'Em teste')
+    .reduce((sum, row) => sum + Number(row.subscription.monthlyValue || 0), 0);
+  const planCounts = rows.reduce<Record<AiPlanId, number>>((acc, row) => {
+    acc[row.subscription.planId] = (acc[row.subscription.planId] ?? 0) + 1;
+    return acc;
+  }, { basic: 0, premium: 0, pro: 0, 'admin-test': 0 });
+  const estimatedAiCost = Number((totalAiUsed * 0.2).toFixed(2));
+  const grossProfit = estimatedRevenue - estimatedAiCost;
+
+  const selectTab = (nextTab: SuperAdminTab) => {
+    setTab(nextTab);
+    setMenuOpen(false);
+    scrollToTop();
+  };
+  const savePersonalSubscription = (personalId: string, updates: Partial<SubscriptionPlan>) => {
+    const current = loadSubscriptionPlan(personalId);
+    const planId = updates.planId && subscriptionPlans[updates.planId] ? updates.planId : current.planId;
+    const plan = subscriptionPlans[planId];
+    const next = normalizeSubscriptionPlan({
+      ...current,
+      ...updates,
+      planId,
+      planName: plan.label,
+      maxStudents: plan.maxStudents,
+      aiLimit: plan.aiLimit,
+      renewsAt: updates.nextRenewalDate || updates.dueDate || current.nextRenewalDate,
+      updatedAt: new Date().toISOString()
+    }, personalId);
+    saveSubscriptionPlan(next);
+    setRefreshKey((value) => value + 1);
+  };
+  const renewPersonal = (personalId: string) => {
+    const nextDate = addMonthsToIsoDate(new Date(), 1);
+    savePersonalSubscription(personalId, { status: 'Ativa', dueDate: nextDate, nextRenewalDate: nextDate, renewsAt: nextDate });
+  };
+  const statusCount = (status: SubscriptionStatus) => rows.filter((row) => row.subscription.status === status).length;
+  void refreshKey;
+
+  return (
+    <div className="mx-auto grid max-w-7xl gap-4 px-3 pb-28 pt-6 md:grid-cols-[240px_1fr] md:gap-5 md:px-6 md:py-7">
+      <div className="md:hidden">
+        <button className="btn-secondary w-full justify-between" onClick={() => setMenuOpen(!menuOpen)}>
+          <span className="inline-flex items-center gap-2"><Menu size={16} /> Menu do dono</span>
+          {menuOpen ? <X size={16} /> : <span className="text-xs text-slate-400">{superAdminTabs.find((item) => item.id === tab)?.label}</span>}
+        </button>
+      </div>
+      <nav className={`scrollbar rounded-lg border border-line bg-panel p-2 md:sticky md:top-20 md:block md:h-[calc(100vh-6.5rem)] md:overflow-y-auto ${menuOpen ? 'block' : 'hidden'}`}>
+        {superAdminTabs.map((item) => (
+          <NavButton key={item.id} active={tab === item.id} icon={item.icon} label={item.label} onClick={() => selectTab(item.id)} />
+        ))}
+      </nav>
+      <section className="min-w-0">
+        <div className="mb-4 rounded-2xl border border-fitblue/20 bg-panel/55 p-4 shadow-[0_18px_44px_rgba(0,0,0,.24)] sm:p-5">
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Super Admin</p>
+          <h1 className="mt-2 text-[21px] font-black leading-tight text-white sm:text-2xl lg:text-[28px]">PersonalPro Evolution — Painel do Dono</h1>
+          <p className="mt-2 text-sm leading-relaxed text-slate-400 sm:text-base">Gerencie personais, planos, assinaturas e uso de IA.</p>
+        </div>
+
+        {tab === 'dashboard' && (
+          <Stack>
+            <Panel title="Dashboard Geral">
+              <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+                <StatCard label="Personais cadastrados" value={rows.length} icon={Users} accent="blue" />
+                <StatCard label="Personais ativos" value={activePersonals} icon={ShieldCheck} accent="green" />
+                <StatCard label="Assinaturas vencidas" value={expiredSubscriptions} icon={CreditCard} accent="orange" />
+                <div className="rounded-2xl border border-fitgreen/25 bg-[linear-gradient(135deg,rgba(15,23,42,.84),rgba(20,83,45,.36))] p-4 shadow-[0_18px_48px_rgba(0,0,0,.32)] sm:p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-bold leading-snug text-slate-300 sm:text-base">Receita mensal prevista</p>
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-fitgreen/25 bg-fitgreen/10 shadow-[0_0_26px_rgba(53,230,140,.16)] sm:h-11 sm:w-11">
+                      <CreditCard className="text-fitgreen" size={22} />
+                    </div>
+                  </div>
+                  <p className="mt-3 whitespace-normal break-words text-[26px] font-black leading-tight text-white sm:text-3xl lg:text-[34px]">{formatCurrency(estimatedRevenue)}</p>
+                </div>
+                <StatCard label="Análises IA usadas no mês" value={totalAiUsed} icon={Sparkles} accent="blue" />
+                <StatCard label="Planos Básico" value={planCounts.basic} icon={ShieldCheck} accent="blue" />
+                <StatCard label="Planos Premium" value={planCounts.premium} icon={ShieldCheck} accent="green" />
+                <StatCard label="Planos Pro" value={planCounts.pro} icon={ShieldCheck} accent="green" />
+              </div>
+            </Panel>
+            <Panel title="Resumo operacional">
+              <div className="grid gap-3 lg:grid-cols-3">
+                {rows.map((row) => (
+                  <div key={row.user.id} className="rounded-xl border border-line bg-ink/45 p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-black text-white">{row.user.name}</p>
+                        <p className="mt-1 text-sm text-slate-400">{row.user.email}</p>
+                      </div>
+                      <span className={`rounded-full border px-2 py-1 text-[11px] font-black ${getSubscriptionStatusClass(row.subscription.status)}`}>{row.subscription.status}</span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <InfoBox label="Plano" value={row.subscription.planName} />
+                      <InfoBox label="IA usada" value={`${row.aiUsage.used}/${row.aiUsage.limit}`} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          </Stack>
+        )}
+
+        {tab === 'personals' && (
+          <Panel title="Personais clientes">
+            <div className="grid gap-3">
+              {rows.map((row) => (
+                <div key={row.user.id} className="rounded-xl border border-line bg-ink/45 p-4">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                    <InfoBox label="Nome" value={row.user.name} />
+                    <InfoBox label="E-mail" value={row.user.email} />
+                    <InfoBox label="Plano" value={row.subscription.planName} />
+                    <InfoBox label="Status" value={row.subscription.status} />
+                    <InfoBox label="Alunos" value={row.studentsCount} />
+                    <InfoBox label="IA usada" value={row.aiUsage.used} />
+                    <InfoBox label="Vencimento" value={formatDate(row.subscription.dueDate)} />
+                  </div>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+                    <button className="btn-secondary w-full" onClick={() => setSelectedPersonalId(row.user.id)}>Ver detalhes</button>
+                    <Select label="Alterar plano" value={row.subscription.planId} onChange={(value) => savePersonalSubscription(row.user.id, { planId: value as AiPlanId })} options={(Object.keys(subscriptionPlans) as AiPlanId[]).map((planId) => [planId, subscriptionPlans[planId].label])} />
+                    <Select label="Alterar status" value={row.subscription.status} onChange={(value) => savePersonalSubscription(row.user.id, { status: value as SubscriptionStatus })} options={subscriptionStatuses.map((status) => [status, status])} />
+                    <button className="btn-danger w-full" onClick={() => savePersonalSubscription(row.user.id, { status: 'Bloqueada' })}>Bloquear acesso</button>
+                    <button className="btn-secondary w-full" onClick={() => savePersonalSubscription(row.user.id, { status: 'Ativa' })}>Reativar acesso</button>
+                    <button className="btn-primary w-full" onClick={() => renewPersonal(row.user.id)}>Renovar assinatura manualmente</button>
+                  </div>
+                  {selectedRow?.user.id === row.user.id && selectedPersonalId && (
+                    <div className="mt-4 rounded-lg border border-fitblue/25 bg-fitblue/10 p-3">
+                      <p className="font-bold text-white">Detalhes do personal</p>
+                      <p className="mt-2 text-sm text-slate-300">Último acesso: {row.lastAccess}</p>
+                      <p className="mt-1 text-sm text-slate-300">Dias restantes: {getSubscriptionDaysRemaining(row.subscription)}</p>
+                      <p className="mt-1 text-sm text-slate-300">{getSubscriptionDaysMessage(row.subscription)}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
+
+        {tab === 'subscriptions' && (
+          <Stack>
+            <Panel title="Assinaturas">
+              <p className="mb-4 rounded-lg border border-fitblue/30 bg-fitblue/10 p-3 text-sm font-semibold text-fitblue">Controle manual. Pagamento automático será integrado futuramente.</p>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                {subscriptionStatuses.map((status) => <InfoBox key={status} label={status} value={statusCount(status)} />)}
+              </div>
+              <div className="mt-4 grid gap-3">
+                {rows.map((row) => (
+                  <div key={row.user.id} className="rounded-xl border border-line bg-ink/45 p-4">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <InfoBox label="Personal" value={row.user.name} />
+                      <Select label="Plano" value={row.subscription.planId} onChange={(value) => savePersonalSubscription(row.user.id, { planId: value as AiPlanId })} options={(Object.keys(subscriptionPlans) as AiPlanId[]).map((planId) => [planId, subscriptionPlans[planId].label])} />
+                      <Select label="Status" value={row.subscription.status} onChange={(value) => savePersonalSubscription(row.user.id, { status: value as SubscriptionStatus })} options={subscriptionStatuses.map((status) => [status, status])} />
+                      <Input label="Data de vencimento" type="date" value={row.subscription.dueDate} onChange={(value) => savePersonalSubscription(row.user.id, { dueDate: value, nextRenewalDate: value, renewsAt: value })} />
+                      <Select label="Forma de pagamento" value={row.subscription.paymentMethod} onChange={(value) => savePersonalSubscription(row.user.id, { paymentMethod: value as SubscriptionPaymentMethod })} options={subscriptionPaymentMethods.map((method) => [method, method])} />
+                      <Input label="Observações" value={row.subscription.notes} onChange={(value) => savePersonalSubscription(row.user.id, { notes: value })} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          </Stack>
+        )}
+
+        {tab === 'ai' && (
+          <Panel title="Uso de IA">
+            <div className="mb-4 grid gap-3 sm:grid-cols-3">
+              <InfoBox label="Uso total no mês" value={totalAiUsed} />
+              <InfoBox label="Limite somado" value={rows.reduce((sum, row) => sum + row.aiUsage.limit, 0)} />
+              <InfoBox label="Alertas de uso alto" value={rows.filter((row) => getAiUsageSummary(row.aiUsage).progress >= 80).length} />
+            </div>
+            <div className="grid gap-3">
+              {rows.map((row) => {
+                const summary = getAiUsageSummary(row.aiUsage);
+                return (
+                  <div key={row.user.id} className="rounded-xl border border-line bg-ink/45 p-4">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="font-black text-white">{row.user.name}</p>
+                        <p className="mt-1 text-sm text-slate-400">Plano {row.subscription.planName}</p>
+                      </div>
+                      <span className={`rounded-full border px-2 py-1 text-xs font-black ${summary.tone === 'red' ? 'border-red-400/40 bg-red-500/10 text-red-200' : summary.tone === 'yellow' ? 'border-yellow-300/40 bg-yellow-300/10 text-yellow-200' : 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen'}`}>
+                        {summary.progress >= 100 ? 'Limite atingido' : summary.progress >= 80 ? 'Uso alto' : 'Normal'}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm text-slate-300">{row.aiUsage.used} / {row.aiUsage.limit} análises usadas. {summary.remaining} restantes.</p>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-ink/70">
+                      <div className={`h-full rounded-full ${summary.tone === 'red' ? 'bg-red-400' : summary.tone === 'yellow' ? 'bg-yellow-300' : 'bg-fitgreen'}`} style={{ width: `${summary.progress}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+        )}
+
+        {tab === 'plans' && (
+          <Panel title="Planos">
+            <p className="mb-4 rounded-lg border border-fitblue/30 bg-fitblue/10 p-3 text-sm font-semibold text-fitblue">Edição visual em modo teste. Sem checkout ou pagamento real nesta fase.</p>
+            <div className="grid gap-3 lg:grid-cols-3">
+              {ownerPlans.map((plan, index) => (
+                <div key={plan.id} className="rounded-xl border border-line bg-ink/45 p-4">
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">{plan.label}</p>
+                  <Input label="Preço mensal" value={plan.price} onChange={(value) => setOwnerPlans((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, price: value } : item))} />
+                  <Input label="Limite de alunos" type="number" value={String(plan.maxStudents)} onChange={(value) => setOwnerPlans((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, maxStudents: Number(value) } : item))} />
+                  <Input label="Limite de IA" type="number" value={String(plan.aiLimit)} onChange={(value) => setOwnerPlans((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, aiLimit: Number(value) } : item))} />
+                  <Textarea label="Recursos" value={plan.featuresText} onChange={(value) => setOwnerPlans((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, featuresText: value } : item))} />
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
+
+        {tab === 'reports' && (
+          <Panel title="Relatórios do negócio">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <InfoBox label="Receita estimada" value={formatCurrency(estimatedRevenue)} />
+              <InfoBox label="Clientes por plano" value={`Básico ${planCounts.basic} · Premium ${planCounts.premium} · Pro ${planCounts.pro}`} />
+              <InfoBox label="Clientes vencidos" value={expiredSubscriptions} />
+              <InfoBox label="Uso de IA total" value={`${totalAiUsed} análises`} />
+              <InfoBox label="Previsão de custo com IA" value={formatCurrency(estimatedAiCost)} />
+              <InfoBox label="Lucro bruto estimado" value={formatCurrency(grossProfit)} />
+            </div>
+          </Panel>
+        )}
+      </section>
+    </div>
   );
 }
 

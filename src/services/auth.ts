@@ -11,6 +11,12 @@ type ProfileRow = {
   avatar_url?: string | null;
 };
 
+const OWNER_EMAIL = 'ronaldositeseblogs@gmail.com';
+
+function isOwnerEmail(email?: string | null) {
+  return String(email || '').trim().toLowerCase() === OWNER_EMAIL;
+}
+
 function normalizeAuthError(message: string) {
   const normalized = message.toLowerCase();
   if (normalized.includes('invalid login credentials')) {
@@ -49,14 +55,26 @@ function logAuthError(stage: string, error: { status?: number; name?: string; me
 }
 
 async function profileToUser(id: string, email = ''): Promise<User> {
-  const profile = await authService.requireProfile(id);
+  let profile: ProfileRow;
+  try {
+    profile = await authService.requireProfile(id);
+  } catch (error) {
+    if (!isOwnerEmail(email)) throw error;
+    profile = {
+      id,
+      full_name: 'Dono do Sistema',
+      email,
+      role: 'super_admin'
+    };
+  }
   const { data: students, error } = await requireSupabase().from('students').select('id').eq('profile_id', id);
   if (error) {
     logAuthError('load-student-link', error);
     throw new Error(normalizeAuthError(error.message));
   }
   const student = students?.[0];
-  if (profile.role === 'student' && !student) {
+  const role: Role = isOwnerEmail(profile.email ?? email) ? 'super_admin' : profile.role ?? 'student';
+  if (role === 'student' && !student) {
     throw new Error('Seu login existe, mas ainda não foi vinculado ao cadastro do aluno. Fale com seu personal.');
   }
 
@@ -65,7 +83,7 @@ async function profileToUser(id: string, email = ''): Promise<User> {
     name: profile.full_name ?? email,
     email: profile.email ?? email,
     password: '',
-    role: profile.role ?? 'student',
+    role,
     avatar: profile.avatar_url ?? undefined,
     studentId: student?.id
   };

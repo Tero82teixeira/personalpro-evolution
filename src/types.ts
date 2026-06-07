@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'student';
+export type Role = 'admin' | 'student' | 'super_admin';
 export type StudentStatus = 'ativo' | 'inativo' | 'teste' | 'pendente';
 export type TrainingLevel = 'iniciante' | 'intermediario' | 'avancado';
 export type TrainingPlace = 'academia' | 'casa' | 'praia' | 'funcional' | 'musculacao' | 'caminhada' | 'outro';
