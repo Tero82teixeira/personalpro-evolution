@@ -35,10 +35,13 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
         const detailResponse = await fetch(`${apiUrl}${detailPath}`, {
           headers: { Authorization: `Bearer ${accessToken}` }
         });
+        const detailBody = await detailResponse.json().catch(() => ({}));
         console.log('Detalhe Mercado Pago consultado:', {
           type: eventType,
           status: detailResponse.status,
-          ok: detailResponse.ok
+          ok: detailResponse.ok,
+          paymentStatus: cleanText(detailBody?.status),
+          externalReference: cleanText(detailBody?.external_reference)
         });
       }
     }

@@ -27,9 +27,22 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     return;
   }
 
+  console.log('MP subscription route called');
   const accessToken = String(process.env.MERCADO_PAGO_ACCESS_TOKEN ?? '').trim();
+  console.log('MP subscription token configured:', Boolean(accessToken));
+  console.log('MP subscription env:', {
+    hasToken: Boolean(accessToken),
+    hasApiUrl: Boolean(process.env.MERCADO_PAGO_API_URL),
+    hasAppUrl: Boolean(process.env.APP_PUBLIC_URL)
+  });
   if (!accessToken) {
-    res.status(503).json({ error: 'Mercado Pago nao configurado. Use controle manual de assinatura.' });
+    res.status(503).json({
+      ok: false,
+      friendlyMessage: 'MERCADO_PAGO_ACCESS_TOKEN nao configurado na Vercel.',
+      mercadoPagoStatus: 503,
+      mercadoPagoError: 'Mercado Pago nao configurado.',
+      mercadoPagoCause: ''
+    });
     return;
   }
 
@@ -96,6 +109,11 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
 
     const apiUrl = normalizeMercadoPagoApiUrl(process.env.MERCADO_PAGO_API_URL);
     const appPublicUrl = normalizePublicUrl(process.env.APP_PUBLIC_URL);
+    console.log('MP subscription payload summary:', {
+      planName,
+      price,
+      hasEmail: Boolean(personalEmail)
+    });
     const mercadoPagoResponse = await fetch(`${apiUrl}/preapproval`, {
       method: 'POST',
       headers: {
@@ -118,17 +136,23 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     });
 
     const responseBody = await mercadoPagoResponse.json().catch(() => ({}));
+    console.log('MP subscription response status:', mercadoPagoResponse.status);
     if (!mercadoPagoResponse.ok) {
-      console.error('Erro Mercado Pago ao criar assinatura:', {
-        status: mercadoPagoResponse.status,
-        hasMessage: Boolean(responseBody?.message || responseBody?.error)
-      });
-      res.status(502).json({ error: 'Nao foi possivel criar a assinatura no Mercado Pago agora.' });
+      const safeErrorSummary = buildMercadoPagoErrorSummary(
+        responseBody,
+        mercadoPagoResponse.status,
+        mercadoPagoResponse.statusText,
+        friendlyMercadoPagoSubscriptionError(mercadoPagoResponse.status)
+      );
+      console.log('MP subscription error status:', mercadoPagoResponse.status);
+      console.log('MP subscription error body:', safeErrorSummary);
+      res.status(502).json(safeErrorSummary);
       return;
     }
 
     const checkoutUrl = responseBody.init_point || responseBody.sandbox_init_point || responseBody.checkout_url || '';
     res.status(200).json({
+      ok: true,
       checkoutUrl,
       init_point: responseBody.init_point,
       subscriptionId: responseBody.id,
@@ -139,7 +163,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     });
   } catch (error) {
     console.error('Erro ao criar assinatura Mercado Pago:', error);
-    res.status(500).json({ error: 'Nao foi possivel criar a assinatura no Mercado Pago agora.' });
+    res.status(500).json({ error: 'Nao foi possivel criar a assinatura no Mercado Pago.' });
   }
 }
 
@@ -192,12 +216,51 @@ function normalizeMercadoPagoApiUrl(value: unknown) {
 }
 
 function normalizePublicUrl(value: unknown) {
-  const rawUrl = String(value ?? '').trim();
-  if (!rawUrl) return '';
+  const rawUrl = String(value ?? 'https://personalpro-evolution.vercel.app').trim() || 'https://personalpro-evolution.vercel.app';
   try {
     const parsed = new URL(rawUrl);
     return parsed.origin;
   } catch {
-    return '';
+    return 'https://personalpro-evolution.vercel.app';
   }
+}
+
+function friendlyMercadoPagoSubscriptionError(status: number) {
+  if (status === 401 || status === 403) return 'Token do Mercado Pago invalido ou sem permissao.';
+  if (status === 400) return 'Dados enviados ao Mercado Pago invalidos.';
+  return 'Nao foi possivel criar a assinatura no Mercado Pago.';
+}
+
+function buildMercadoPagoErrorSummary(body: any, status: number, statusText: string, fallbackFriendlyMessage: string) {
+  const mercadoPagoError = cleanText(body?.message || body?.error_description || body?.error || statusText || fallbackFriendlyMessage);
+  const mercadoPagoCause = summarizeCause(body?.cause);
+  const sellerEmailHint = buildSellerEmailHint(`${mercadoPagoError} ${mercadoPagoCause}`);
+  const finalCause = sellerEmailHint ? [mercadoPagoCause, sellerEmailHint].filter(Boolean).join(' | ') : mercadoPagoCause;
+  return {
+    ok: false,
+    friendlyMessage: fallbackFriendlyMessage,
+    mercadoPagoStatus: status,
+    mercadoPagoError,
+    mercadoPagoCause: finalCause
+  };
+}
+
+function summarizeCause(cause: any) {
+  const firstCause = Array.isArray(cause) ? cause[0] : cause;
+  if (!firstCause) return '';
+  if (typeof firstCause === 'string') return cleanText(firstCause);
+  return cleanText(firstCause.description || firstCause.message || firstCause.error || firstCause.code || JSON.stringify(firstCause));
+}
+
+function buildSellerEmailHint(value: string) {
+  const normalized = value.toLowerCase();
+  if (
+    normalized.includes('collector') ||
+    normalized.includes('same account') ||
+    normalized.includes('same user') ||
+    normalized.includes('payer') && normalized.includes('seller')
+  ) {
+    return 'Use um e-mail de comprador diferente do e-mail da conta Mercado Pago vendedora.';
+  }
+  return '';
 }

@@ -174,7 +174,7 @@ const aiPlans: Record<AiPlanId, { label: string; aiLimit: number }> = {
 
 type SubscriptionStatus = 'Ativa' | 'Em teste' | 'Vencida' | 'Cancelada' | 'Bloqueada';
 type SubscriptionPaymentMethod = 'Pix' | 'Cartao de credito' | 'Boleto' | 'Dinheiro' | 'Transferencia' | 'Cortesia' | 'Outro';
-type SubscriptionGateway = 'Manual' | 'Mercado Pago';
+type SubscriptionGateway = 'Manual' | 'Mercado Pago' | 'Mercado Pago Pix';
 
 type SubscriptionPlan = {
   userId: string;
@@ -198,6 +198,18 @@ type SubscriptionPlan = {
   isTrial: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+type MercadoPagoPixInfo = {
+  planId: AiPlanId;
+  planName: string;
+  price: number;
+  paymentId: string;
+  status: string;
+  qrCode: string;
+  qrCodeBase64: string;
+  ticketUrl: string;
+  expirationDate: string;
 };
 
 const subscriptionStatuses: SubscriptionStatus[] = ['Ativa', 'Em teste', 'Vencida', 'Cancelada', 'Bloqueada'];
@@ -348,7 +360,7 @@ function normalizeSubscriptionPlan(value: Partial<SubscriptionPlan> | null | und
   const status = subscriptionStatuses.includes(rawStatus as SubscriptionStatus) ? rawStatus as SubscriptionStatus : statusMap[rawStatus] ?? fallback.status;
   const rawPaymentMethod = String(value?.paymentMethod ?? fallback.paymentMethod);
   const paymentMethod = subscriptionPaymentMethods.includes(rawPaymentMethod as SubscriptionPaymentMethod) ? rawPaymentMethod as SubscriptionPaymentMethod : fallback.paymentMethod;
-  const gateway = value?.gateway === 'Mercado Pago' ? 'Mercado Pago' : 'Manual';
+  const gateway = value?.gateway === 'Mercado Pago Pix' ? 'Mercado Pago Pix' : value?.gateway === 'Mercado Pago' ? 'Mercado Pago' : 'Manual';
   const dueDate = value?.dueDate || value?.renewsAt || fallback.dueDate;
   const nextRenewalDate = value?.nextRenewalDate || value?.renewsAt || dueDate;
   return {
@@ -453,6 +465,14 @@ function parseSubscriptionPrice(value: string) {
     .replace(',', '.');
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? Number(parsed.toFixed(2)) : 0;
+}
+
+function formatMercadoPagoFrontendError(prefix: string, result: any, fallbackMessage: string) {
+  const rawMessage = String(result?.mercadoPagoError || result?.friendlyMessage || result?.error || fallbackMessage).trim();
+  const message = rawMessage.replace(/\s+/g, ' ').slice(0, 260);
+  const status = result?.mercadoPagoStatus ? ` Status: ${result.mercadoPagoStatus}.` : '';
+  const cause = result?.mercadoPagoCause ? ` Causa: ${String(result.mercadoPagoCause).replace(/\s+/g, ' ').slice(0, 260)}.` : '';
+  return `${prefix}: ${message || fallbackMessage}.${status}${cause}`;
 }
 
 const emptyStudent: Student = {
@@ -3907,8 +3927,13 @@ function PersonalSettingsView({
   const [isSubscriptionEditing, setIsSubscriptionEditing] = useState(false);
   const [showPlans, setShowPlans] = useState(false);
   const [mercadoPagoLoadingPlan, setMercadoPagoLoadingPlan] = useState('');
-  const [mercadoPagoMessage, setMercadoPagoMessage] = useState('');
-  const [mercadoPagoError, setMercadoPagoError] = useState('');
+  const [mercadoPagoPixLoadingPlan, setMercadoPagoPixLoadingPlan] = useState('');
+  const [mercadoPagoSubscriptionMessage, setMercadoPagoSubscriptionMessage] = useState('');
+  const [mercadoPagoSubscriptionError, setMercadoPagoSubscriptionError] = useState('');
+  const [mercadoPagoPixMessage, setMercadoPagoPixMessage] = useState('');
+  const [mercadoPagoPixError, setMercadoPagoPixError] = useState('');
+  const [mercadoPagoPixInfo, setMercadoPagoPixInfo] = useState<MercadoPagoPixInfo | null>(null);
+  const [pixCopyFeedback, setPixCopyFeedback] = useState('');
   const subscriptionUsage = getAiUsageSummary(aiUsage);
   const studentProgress = subscriptionPlan.maxStudents > 0 ? Math.min(100, Math.round((data.students.length / subscriptionPlan.maxStudents) * 100)) : 100;
   const statusClass = getSubscriptionStatusClass(subscriptionPlan.status);
@@ -3923,8 +3948,8 @@ function PersonalSettingsView({
   const createMercadoPagoSubscription = async (planId: AiPlanId) => {
     const plan = subscriptionPlans[planId];
     setMercadoPagoLoadingPlan(planId);
-    setMercadoPagoMessage('');
-    setMercadoPagoError('');
+    setMercadoPagoSubscriptionMessage('');
+    setMercadoPagoSubscriptionError('');
     try {
       if (!supabase) {
         throw new Error('Sessao Supabase nao encontrada. Use assinatura manual ou rode pela Vercel/Supabase.');
@@ -3950,8 +3975,8 @@ function PersonalSettingsView({
         })
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(result.error || 'Nao foi possivel criar assinatura no Mercado Pago.');
+      if (!response.ok || result.ok === false) {
+        throw new Error(formatMercadoPagoFrontendError('Mercado Pago recusou a assinatura', result, 'Nao foi possivel criar a assinatura no Mercado Pago'));
       }
       const checkoutUrl = result.checkoutUrl || result.init_point || '';
       const nextSubscription = normalizeSubscriptionPlan({
@@ -3970,15 +3995,126 @@ function PersonalSettingsView({
       }, subscriptionPlan.userId);
       onManualSubscriptionSave(nextSubscription);
       setSubscriptionForm(nextSubscription);
-      setMercadoPagoMessage('Assinatura criada. Conclua o pagamento no Mercado Pago.');
+      setMercadoPagoSubscriptionMessage('Assinatura criada. Conclua o pagamento no Mercado Pago.');
       if (checkoutUrl) {
         window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
       }
     } catch (error) {
-      setMercadoPagoError(error instanceof Error ? error.message : 'Mercado Pago nao configurado. Use assinatura manual.');
+      setMercadoPagoSubscriptionError(error instanceof Error ? error.message : 'Nao foi possivel criar a assinatura no Mercado Pago.');
     } finally {
       setMercadoPagoLoadingPlan('');
     }
+  };
+  const createMercadoPagoPixPayment = async (planId: AiPlanId) => {
+    const plan = subscriptionPlans[planId];
+    setMercadoPagoPixLoadingPlan(planId);
+    setMercadoPagoPixMessage('');
+    setMercadoPagoPixError('');
+    setPixCopyFeedback('');
+    setMercadoPagoPixInfo(null);
+    try {
+      if (!supabase) {
+        throw new Error('Sessao Supabase nao encontrada. Use assinatura manual ou rode pela Vercel/Supabase.');
+      }
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !sessionData.session?.access_token) {
+        throw new Error('Sessao nao encontrada. Entre como Personal/Admin novamente.');
+      }
+      const response = await fetch('/api/create-mercadopago-pix-payment', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sessionData.session.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          planId,
+          planName: plan.label,
+          price: parseSubscriptionPrice(plan.price),
+          personalName: currentSettings.personalName,
+          personalEmail: currentSettings.professionalEmail,
+          userId: subscriptionPlan.userId,
+          profileId: subscriptionPlan.userId
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(formatMercadoPagoFrontendError('Mercado Pago recusou o Pix', result, 'Nao foi possivel gerar Pix no Mercado Pago'));
+      }
+      if (!result.qrCode) {
+        throw new Error(formatMercadoPagoFrontendError('Mercado Pago recusou o Pix', result, 'Mercado Pago criou/retornou resposta sem codigo Pix. Verifique credenciais e dados do pagador'));
+      }
+      const price = parseSubscriptionPrice(plan.price);
+      const pixInfo: MercadoPagoPixInfo = {
+        planId,
+        planName: plan.label,
+        price,
+        paymentId: String(result.paymentId || ''),
+        status: String(result.status || 'pending'),
+        qrCode: String(result.qrCode || ''),
+        qrCodeBase64: String(result.qrCodeBase64 || ''),
+        ticketUrl: String(result.ticketUrl || ''),
+        expirationDate: String(result.expirationDate || '')
+      };
+      setMercadoPagoPixInfo(pixInfo);
+      const nextSubscription = normalizeSubscriptionPlan({
+        ...subscriptionPlan,
+        planId,
+        planName: plan.label,
+        maxStudents: plan.maxStudents,
+        aiLimit: plan.aiLimit,
+        monthlyValue: price,
+        paymentMethod: 'Pix',
+        gateway: 'Mercado Pago Pix',
+        gatewaySubscriptionId: pixInfo.paymentId,
+        paymentStatus: 'Aguardando pagamento',
+        paymentLink: pixInfo.ticketUrl,
+        paymentUpdatedAt: new Date().toISOString(),
+        notes: 'Pix gerado. Confirme o pagamento no Mercado Pago ou marque manualmente quando pago.'
+      }, subscriptionPlan.userId);
+      onManualSubscriptionSave(nextSubscription);
+      setSubscriptionForm(nextSubscription);
+      setMercadoPagoPixMessage('Pix gerado com sucesso. Aguarde a confirmacao do pagamento.');
+    } catch (error) {
+      setMercadoPagoPixError(error instanceof Error ? error.message : 'Nao foi possivel gerar Pix no Mercado Pago.');
+    } finally {
+      setMercadoPagoPixLoadingPlan('');
+    }
+  };
+  const copyPixCode = async () => {
+    if (!mercadoPagoPixInfo?.qrCode) return;
+    try {
+      await copyTextToClipboard(mercadoPagoPixInfo.qrCode);
+      setPixCopyFeedback('Codigo Pix copiado.');
+    } catch {
+      window.alert('Nao foi possivel copiar o codigo Pix.');
+    }
+  };
+  const markPixAsPaidManually = () => {
+    if (!mercadoPagoPixInfo) return;
+    const nextDate = addMonthsToIsoDate(new Date(), 1);
+    const plan = subscriptionPlans[mercadoPagoPixInfo.planId];
+    const nextSubscription = normalizeSubscriptionPlan({
+      ...subscriptionPlan,
+      planId: mercadoPagoPixInfo.planId,
+      planName: plan.label,
+      status: 'Ativa',
+      maxStudents: plan.maxStudents,
+      aiLimit: plan.aiLimit,
+      monthlyValue: mercadoPagoPixInfo.price,
+      paymentMethod: 'Pix',
+      gateway: 'Mercado Pago Pix',
+      gatewaySubscriptionId: mercadoPagoPixInfo.paymentId,
+      paymentStatus: 'Pago',
+      paymentLink: mercadoPagoPixInfo.ticketUrl,
+      dueDate: nextDate,
+      nextRenewalDate: nextDate,
+      renewsAt: nextDate,
+      paymentUpdatedAt: new Date().toISOString(),
+      notes: 'Pix marcado como pago manualmente. Webhook automatico sera finalizado futuramente.'
+    }, subscriptionPlan.userId);
+    onManualSubscriptionSave(nextSubscription);
+    setSubscriptionForm(nextSubscription);
+    setMercadoPagoPixMessage('Pix marcado como pago manualmente. Plano ativado por 30 dias.');
   };
 
   useEffect(() => {
@@ -4089,8 +4225,10 @@ function PersonalSettingsView({
             </div>
             <p className="mt-4 text-sm leading-6 text-slate-300">Esta é uma versão de teste. A cobrança real será integrada em uma etapa futura.</p>
             <p className="mt-1 text-sm leading-6 text-slate-300">Os limites ajudam a controlar custos de IA e organizar os planos do sistema.</p>
-            {mercadoPagoMessage && <p className="mt-3 rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">{mercadoPagoMessage}</p>}
-            {mercadoPagoError && <p className="mt-3 rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">{mercadoPagoError}</p>}
+            {mercadoPagoSubscriptionMessage && <p className="mt-3 rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">{mercadoPagoSubscriptionMessage}</p>}
+            {mercadoPagoSubscriptionError && <p className="mt-3 rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">{mercadoPagoSubscriptionError}</p>}
+            {mercadoPagoPixMessage && <p className="mt-3 rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">{mercadoPagoPixMessage}</p>}
+            {mercadoPagoPixError && <p className="mt-3 rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">{mercadoPagoPixError}</p>}
           </div>
 
           <div className="rounded-xl border border-line bg-ink/45 p-4">
@@ -4125,9 +4263,55 @@ function PersonalSettingsView({
                   <button className="btn-secondary mt-2 w-full" onClick={() => createMercadoPagoSubscription(planId)} disabled={mercadoPagoLoadingPlan === planId}>
                     {mercadoPagoLoadingPlan === planId ? 'Gerando assinatura no Mercado Pago...' : 'Assinar com Mercado Pago'}
                   </button>
+                  <button className="btn-secondary mt-2 w-full" onClick={() => createMercadoPagoPixPayment(planId)} disabled={mercadoPagoPixLoadingPlan === planId}>
+                    {mercadoPagoPixLoadingPlan === planId ? 'Gerando Pix seguro...' : 'Pagar via Pix'}
+                  </button>
                 </div>
               );
             })}
+          </div>
+        )}
+        {mercadoPagoPixInfo && (
+          <div className="mt-4 rounded-xl border border-fitgreen/30 bg-[linear-gradient(135deg,rgba(34,197,94,.12),rgba(13,23,38,.94))] p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">💠 Pagamento via Pix</p>
+                <h3 className="mt-2 text-xl font-black text-white">{mercadoPagoPixInfo.planName}</h3>
+                <p className="mt-1 text-sm text-slate-300">Valor: {formatCurrency(mercadoPagoPixInfo.price)}</p>
+                <p className="mt-1 text-sm text-slate-300">Status: Aguardando pagamento</p>
+              </div>
+              <Badge label="Mercado Pago Pix" />
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
+              <div className="rounded-xl border border-line bg-white p-3">
+                {mercadoPagoPixInfo.qrCodeBase64 ? (
+                  <img className="mx-auto aspect-square w-full max-w-[190px] object-contain" src={`data:image/png;base64,${mercadoPagoPixInfo.qrCodeBase64}`} alt="QR Code Pix" />
+                ) : (
+                  <div className="grid aspect-square w-full place-items-center rounded-lg bg-slate-100 p-4 text-center text-sm font-bold text-slate-600">QR Code indisponivel</div>
+                )}
+              </div>
+              <div className="space-y-3">
+                <InfoBox label="ID do pagamento" value={mercadoPagoPixInfo.paymentId || 'Sem registro'} />
+                <InfoBox label="Expiracao" value={mercadoPagoPixInfo.expirationDate ? formatDate(mercadoPagoPixInfo.expirationDate) : 'Sem registro'} />
+                {mercadoPagoPixInfo.qrCode ? (
+                  <div className="rounded-xl border border-line bg-ink/50 p-3">
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Codigo Pix copia e cola</p>
+                    <textarea className="mt-2 min-h-28 w-full resize-y rounded-lg border border-line bg-panel p-3 text-xs leading-5 text-slate-100 outline-none" value={mercadoPagoPixInfo.qrCode} readOnly />
+                    <button className="btn-primary mt-3 w-full sm:w-auto" onClick={copyPixCode}>Copiar codigo Pix</button>
+                    {pixCopyFeedback && <p className="mt-2 text-sm font-semibold text-fitgreen">{pixCopyFeedback}</p>}
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">Codigo Pix nao retornado. Use o link de pagamento se estiver disponivel.</p>
+                )}
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  {mercadoPagoPixInfo.ticketUrl && (
+                    <a className="btn-secondary w-full sm:w-auto" href={mercadoPagoPixInfo.ticketUrl} target="_blank" rel="noopener noreferrer">Abrir pagamento no Mercado Pago</a>
+                  )}
+                  <button className="btn-primary w-full sm:w-auto" onClick={markPixAsPaidManually}>Marcar Pix como pago manualmente</button>
+                </div>
+                <p className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-3 text-sm leading-6 text-slate-300">Apos o pagamento, a confirmacao pode levar alguns instantes. Confirmacao manual temporaria. Webhook automatico sera finalizado futuramente.</p>
+              </div>
+            </div>
           </div>
         )}
         <div className="mt-4 rounded-xl border border-fitblue/30 bg-[linear-gradient(135deg,rgba(56,189,248,.10),rgba(13,23,38,.92))] p-4">
