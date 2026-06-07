@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import { defaultPersonalSettings, loadData, saveData, loadSession, makeId, savePersonalSettings } from './services/storage';
 import { isSupabaseConfigured } from './services/supabase/config';
+import { supabase } from './services/supabase/client';
 import { authService } from './services/auth';
 import { loadAppData } from './services/appData';
 import {
@@ -173,6 +174,7 @@ const aiPlans: Record<AiPlanId, { label: string; aiLimit: number }> = {
 
 type SubscriptionStatus = 'Ativa' | 'Em teste' | 'Vencida' | 'Cancelada' | 'Bloqueada';
 type SubscriptionPaymentMethod = 'Pix' | 'Cartao de credito' | 'Boleto' | 'Dinheiro' | 'Transferencia' | 'Cortesia' | 'Outro';
+type SubscriptionGateway = 'Manual' | 'Mercado Pago';
 
 type SubscriptionPlan = {
   userId: string;
@@ -188,6 +190,11 @@ type SubscriptionPlan = {
   renewsAt: string;
   nextRenewalDate: string;
   notes: string;
+  gateway: SubscriptionGateway;
+  gatewaySubscriptionId: string;
+  paymentStatus: string;
+  paymentLink: string;
+  paymentUpdatedAt: string;
   isTrial: boolean;
   createdAt: string;
   updatedAt: string;
@@ -308,13 +315,18 @@ function createSubscriptionPlan(userId: string, planId: AiPlanId = 'admin-test')
     status: planId === 'admin-test' ? 'Em teste' : 'Ativa',
     maxStudents: plan.maxStudents,
     aiLimit: plan.aiLimit,
-    monthlyValue: Number(plan.price.replace(/\D/g, '')) || 0,
+    monthlyValue: parseSubscriptionPrice(plan.price),
     paymentMethod: planId === 'admin-test' ? 'Cortesia' : 'Pix',
     startedAt: today,
     dueDate: nextRenewalDate,
     renewsAt: nextRenewalDate,
     nextRenewalDate,
     notes: 'Controle manual de assinatura. Integração com pagamento automático será adicionada futuramente.',
+    gateway: 'Manual',
+    gatewaySubscriptionId: '',
+    paymentStatus: 'Manual',
+    paymentLink: '',
+    paymentUpdatedAt: now.toISOString(),
     isTrial: planId === 'admin-test',
     createdAt: now.toISOString(),
     updatedAt: now.toISOString()
@@ -336,6 +348,7 @@ function normalizeSubscriptionPlan(value: Partial<SubscriptionPlan> | null | und
   const status = subscriptionStatuses.includes(rawStatus as SubscriptionStatus) ? rawStatus as SubscriptionStatus : statusMap[rawStatus] ?? fallback.status;
   const rawPaymentMethod = String(value?.paymentMethod ?? fallback.paymentMethod);
   const paymentMethod = subscriptionPaymentMethods.includes(rawPaymentMethod as SubscriptionPaymentMethod) ? rawPaymentMethod as SubscriptionPaymentMethod : fallback.paymentMethod;
+  const gateway = value?.gateway === 'Mercado Pago' ? 'Mercado Pago' : 'Manual';
   const dueDate = value?.dueDate || value?.renewsAt || fallback.dueDate;
   const nextRenewalDate = value?.nextRenewalDate || value?.renewsAt || dueDate;
   return {
@@ -353,6 +366,11 @@ function normalizeSubscriptionPlan(value: Partial<SubscriptionPlan> | null | und
     renewsAt: nextRenewalDate,
     nextRenewalDate,
     notes: value?.notes ?? fallback.notes,
+    gateway,
+    gatewaySubscriptionId: value?.gatewaySubscriptionId ?? fallback.gatewaySubscriptionId,
+    paymentStatus: value?.paymentStatus ?? fallback.paymentStatus,
+    paymentLink: value?.paymentLink ?? fallback.paymentLink,
+    paymentUpdatedAt: value?.paymentUpdatedAt ?? fallback.paymentUpdatedAt,
     isTrial: planId === 'admin-test'
   };
 }
@@ -426,6 +444,15 @@ function getSubscriptionAccess(subscription: SubscriptionPlan) {
       ? 'Assinatura inativa. Regularize para continuar usando o sistema.'
       : 'Assinatura vencida. Alguns recursos premium podem ser bloqueados.'
   };
+}
+
+function parseSubscriptionPrice(value: string) {
+  const normalized = String(value)
+    .replace(/[^\d,.-]/g, '')
+    .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+    .replace(',', '.');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? Number(parsed.toFixed(2)) : 0;
 }
 
 const emptyStudent: Student = {
@@ -1513,6 +1540,7 @@ function SuperAdminArea({ user, data }: { user: User; data: AppData }) {
                     <InfoBox label="E-mail" value={row.user.email} />
                     <InfoBox label="Plano" value={row.subscription.planName} />
                     <InfoBox label="Status" value={row.subscription.status} />
+                    <InfoBox label="Gateway" value={row.subscription.gateway} />
                     <InfoBox label="Alunos" value={row.studentsCount} />
                     <InfoBox label="IA usada" value={row.aiUsage.used} />
                     <InfoBox label="Vencimento" value={formatDate(row.subscription.dueDate)} />
@@ -1551,6 +1579,8 @@ function SuperAdminArea({ user, data }: { user: User; data: AppData }) {
                   <div key={row.user.id} className="rounded-xl border border-line bg-ink/45 p-4">
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                       <InfoBox label="Personal" value={row.user.name} />
+                      <InfoBox label="Gateway" value={row.subscription.gateway} />
+                      <InfoBox label="Status pagamento" value={row.subscription.paymentStatus || 'Manual'} />
                       <Select label="Plano" value={row.subscription.planId} onChange={(value) => savePersonalSubscription(row.user.id, { planId: value as AiPlanId })} options={(Object.keys(subscriptionPlans) as AiPlanId[]).map((planId) => [planId, subscriptionPlans[planId].label])} />
                       <Select label="Status" value={row.subscription.status} onChange={(value) => savePersonalSubscription(row.user.id, { status: value as SubscriptionStatus })} options={subscriptionStatuses.map((status) => [status, status])} />
                       <Input label="Data de vencimento" type="date" value={row.subscription.dueDate} onChange={(value) => savePersonalSubscription(row.user.id, { dueDate: value, nextRenewalDate: value, renewsAt: value })} />
@@ -3876,6 +3906,9 @@ function PersonalSettingsView({
   const [subscriptionForm, setSubscriptionForm] = useState<SubscriptionPlan>(subscriptionPlan);
   const [isSubscriptionEditing, setIsSubscriptionEditing] = useState(false);
   const [showPlans, setShowPlans] = useState(false);
+  const [mercadoPagoLoadingPlan, setMercadoPagoLoadingPlan] = useState('');
+  const [mercadoPagoMessage, setMercadoPagoMessage] = useState('');
+  const [mercadoPagoError, setMercadoPagoError] = useState('');
   const subscriptionUsage = getAiUsageSummary(aiUsage);
   const studentProgress = subscriptionPlan.maxStudents > 0 ? Math.min(100, Math.round((data.students.length / subscriptionPlan.maxStudents) * 100)) : 100;
   const statusClass = getSubscriptionStatusClass(subscriptionPlan.status);
@@ -3885,6 +3918,67 @@ function PersonalSettingsView({
   const selectSubscriptionPlan = (planId: AiPlanId) => {
     onSubscriptionChange(planId);
     window.alert('Modo teste: alteração de plano simulada. Integração de pagamento será adicionada futuramente.');
+  };
+
+  const createMercadoPagoSubscription = async (planId: AiPlanId) => {
+    const plan = subscriptionPlans[planId];
+    setMercadoPagoLoadingPlan(planId);
+    setMercadoPagoMessage('');
+    setMercadoPagoError('');
+    try {
+      if (!supabase) {
+        throw new Error('Sessao Supabase nao encontrada. Use assinatura manual ou rode pela Vercel/Supabase.');
+      }
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !sessionData.session?.access_token) {
+        throw new Error('Sessao nao encontrada. Entre como Personal/Admin novamente.');
+      }
+      const response = await fetch('/api/create-mercadopago-subscription', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${sessionData.session.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          planId,
+          planName: plan.label,
+          price: parseSubscriptionPrice(plan.price),
+          personalName: currentSettings.personalName,
+          personalEmail: currentSettings.professionalEmail,
+          userId: subscriptionPlan.userId,
+          profileId: subscriptionPlan.userId
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || 'Nao foi possivel criar assinatura no Mercado Pago.');
+      }
+      const checkoutUrl = result.checkoutUrl || result.init_point || '';
+      const nextSubscription = normalizeSubscriptionPlan({
+        ...subscriptionPlan,
+        planId,
+        planName: plan.label,
+        maxStudents: plan.maxStudents,
+        aiLimit: plan.aiLimit,
+        monthlyValue: parseSubscriptionPrice(plan.price),
+        gateway: 'Mercado Pago',
+        gatewaySubscriptionId: result.subscriptionId || result.preapprovalId || '',
+        paymentStatus: 'Aguardando pagamento',
+        paymentLink: checkoutUrl,
+        paymentUpdatedAt: new Date().toISOString(),
+        notes: 'Assinatura criada. Conclua o pagamento no Mercado Pago.'
+      }, subscriptionPlan.userId);
+      onManualSubscriptionSave(nextSubscription);
+      setSubscriptionForm(nextSubscription);
+      setMercadoPagoMessage('Assinatura criada. Conclua o pagamento no Mercado Pago.');
+      if (checkoutUrl) {
+        window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
+      }
+    } catch (error) {
+      setMercadoPagoError(error instanceof Error ? error.message : 'Mercado Pago nao configurado. Use assinatura manual.');
+    } finally {
+      setMercadoPagoLoadingPlan('');
+    }
   };
 
   useEffect(() => {
@@ -3995,6 +4089,8 @@ function PersonalSettingsView({
             </div>
             <p className="mt-4 text-sm leading-6 text-slate-300">Esta é uma versão de teste. A cobrança real será integrada em uma etapa futura.</p>
             <p className="mt-1 text-sm leading-6 text-slate-300">Os limites ajudam a controlar custos de IA e organizar os planos do sistema.</p>
+            {mercadoPagoMessage && <p className="mt-3 rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">{mercadoPagoMessage}</p>}
+            {mercadoPagoError && <p className="mt-3 rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">{mercadoPagoError}</p>}
           </div>
 
           <div className="rounded-xl border border-line bg-ink/45 p-4">
@@ -4026,6 +4122,9 @@ function PersonalSettingsView({
                   <button className="btn-primary mt-4 w-full" onClick={() => selectSubscriptionPlan(planId)}>
                     Selecionar plano
                   </button>
+                  <button className="btn-secondary mt-2 w-full" onClick={() => createMercadoPagoSubscription(planId)} disabled={mercadoPagoLoadingPlan === planId}>
+                    {mercadoPagoLoadingPlan === planId ? 'Gerando assinatura no Mercado Pago...' : 'Assinar com Mercado Pago'}
+                  </button>
                 </div>
               );
             })}
@@ -4048,11 +4147,20 @@ function PersonalSettingsView({
             <InfoBox label="Plano contratado" value={subscriptionPlan.planName} />
             <InfoBox label="Valor mensal" value={formatCurrency(subscriptionPlan.monthlyValue)} />
             <InfoBox label="Forma de pagamento" value={subscriptionPlan.paymentMethod} />
+            <InfoBox label="Gateway" value={subscriptionPlan.gateway} />
+            <InfoBox label="ID da assinatura" value={subscriptionPlan.gatewaySubscriptionId || 'Sem registro'} />
+            <InfoBox label="Status do pagamento" value={subscriptionPlan.paymentStatus || 'Manual'} />
             <InfoBox label="Data de inicio" value={formatDate(subscriptionPlan.startedAt)} />
             <InfoBox label="Data de vencimento" value={formatDate(subscriptionPlan.dueDate)} />
             <InfoBox label="Dias restantes" value={subscriptionDaysRemaining} />
             <InfoBox label="Proxima renovacao" value={formatDate(subscriptionPlan.nextRenewalDate)} />
+            <InfoBox label="Ultima atualizacao" value={subscriptionPlan.paymentUpdatedAt ? formatDate(subscriptionPlan.paymentUpdatedAt) : 'Sem registro'} />
           </div>
+          {subscriptionPlan.paymentLink && (
+            <a className="btn-secondary mt-3 w-full sm:w-auto" href={subscriptionPlan.paymentLink} target="_blank" rel="noopener noreferrer">
+              Abrir link de pagamento
+            </a>
+          )}
           <div className="mt-4">
             <p className={`rounded-lg border p-3 text-sm font-semibold ${subscriptionAccess.isInactive ? 'border-red-400/30 bg-red-500/10 text-red-200' : 'border-fitgreen/30 bg-fitgreen/10 text-fitgreen'}`}>
               {subscriptionDaysMessage}
@@ -4073,7 +4181,7 @@ function PersonalSettingsView({
                   planName: plan.label,
                   maxStudents: plan.maxStudents,
                   aiLimit: plan.aiLimit,
-                  monthlyValue: Number(plan.price.replace(/\D/g, '')) || subscriptionForm.monthlyValue
+                  monthlyValue: parseSubscriptionPrice(plan.price) || subscriptionForm.monthlyValue
                 });
               }} options={(Object.keys(subscriptionPlans) as AiPlanId[]).map((planId) => [planId, subscriptionPlans[planId].label])} />
               <Input label="Valor mensal" type="number" value={String(subscriptionForm.monthlyValue)} onChange={(value) => setSubscriptionForm({ ...subscriptionForm, monthlyValue: Number(value) })} />
