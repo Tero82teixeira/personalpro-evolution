@@ -475,6 +475,16 @@ function formatMercadoPagoFrontendError(prefix: string, result: any, fallbackMes
   return `${prefix}: ${message || fallbackMessage}.${status}${cause}`;
 }
 
+function isValidMercadoPagoPaymentUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const text = `${url.hostname}${url.pathname}`.toLowerCase();
+    return url.protocol.startsWith('http') && (text.includes('mercadopago') || text.includes('mercado'));
+  } catch {
+    return false;
+  }
+}
+
 const emptyStudent: Student = {
   id: '',
   profileId: '',
@@ -4010,13 +4020,6 @@ function PersonalSettingsView({
   };
   const createMercadoPagoPixPayment = async (planId: AiPlanId) => {
     const plan = subscriptionPlans[planId];
-    const paymentWindow = (() => {
-      try {
-        return window.open('', '_blank');
-      } catch {
-        return null;
-      }
-    })();
     setMercadoPagoPixLoadingPlan(planId);
     setMercadoPagoPixMessage('');
     setMercadoPagoPixError('');
@@ -4066,11 +4069,6 @@ function PersonalSettingsView({
         expirationDate: String(result.expirationDate || '')
       };
       setMercadoPagoPixInfo(pixInfo);
-      if (pixInfo.ticketUrl && paymentWindow) {
-        paymentWindow.location.href = pixInfo.ticketUrl;
-      } else if (paymentWindow) {
-        paymentWindow.close();
-      }
       const nextSubscription = normalizeSubscriptionPlan({
         ...subscriptionPlan,
         planId,
@@ -4088,16 +4086,9 @@ function PersonalSettingsView({
       }, subscriptionPlan.userId);
       onManualSubscriptionSave(nextSubscription);
       setSubscriptionForm(nextSubscription);
-      setMercadoPagoPixMessage(
-        pixInfo.ticketUrl
-          ? paymentWindow
-            ? 'Pix gerado com sucesso. Abrimos a pagina do Mercado Pago para voce concluir o pagamento.'
-            : 'Pix gerado com sucesso. Nao conseguimos abrir automaticamente. Clique em Abrir pagamento no Mercado Pago.'
-          : 'Pix gerado com sucesso. Use o QR Code ou o codigo Pix copia e cola para concluir o pagamento.'
-      );
+      setMercadoPagoPixMessage('Pix gerado com sucesso. Voce pode pagar pelo QR Code, copiar o codigo Pix ou abrir a pagina do Mercado Pago.');
       return true;
     } catch (error) {
-      if (paymentWindow) paymentWindow.close();
       setMercadoPagoPixError(error instanceof Error ? error.message : 'Nao foi possivel gerar Pix no Mercado Pago.');
       return false;
     } finally {
@@ -4213,6 +4204,7 @@ function PersonalSettingsView({
     setIsSubscriptionEditing(false);
     window.alert('Assinatura atualizada com sucesso.');
   };
+  const pixTicketUrlIsValid = mercadoPagoPixInfo?.ticketUrl ? isValidMercadoPagoPaymentUrl(mercadoPagoPixInfo.ticketUrl) : false;
 
   return (
     <Stack>
@@ -4364,9 +4356,7 @@ function PersonalSettingsView({
                 <p className="mt-1 text-sm text-slate-300">Valor: {formatCurrency(mercadoPagoPixInfo.price)}</p>
                 <p className="mt-1 text-sm text-slate-300">Status: Aguardando pagamento</p>
                 <p className="mt-2 rounded-lg border border-fitblue/25 bg-fitblue/10 p-3 text-sm leading-6 text-slate-200">
-                  {mercadoPagoPixInfo.ticketUrl
-                    ? 'A pagina do Mercado Pago foi aberta em uma nova aba. Se nao abriu, clique no botao abaixo.'
-                    : 'Use o QR Code ou o codigo Pix copia e cola abaixo para concluir o pagamento.'}
+                  Pix gerado com sucesso. Voce pode pagar pelo QR Code, copiar o codigo Pix ou abrir a pagina do Mercado Pago.
                 </p>
               </div>
               <Badge label="Mercado Pago Pix" />
@@ -4393,11 +4383,21 @@ function PersonalSettingsView({
                   <p className="rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">Codigo Pix nao retornado. Use o link de pagamento se estiver disponivel.</p>
                 )}
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  {mercadoPagoPixInfo.ticketUrl && (
+                  {pixTicketUrlIsValid ? (
                     <a className="btn-secondary w-full sm:w-auto" href={mercadoPagoPixInfo.ticketUrl} target="_blank" rel="noopener noreferrer">Abrir pagamento no Mercado Pago</a>
+                  ) : (
+                    <p className="rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">Link de pagamento nao disponivel. Use o QR Code ou o codigo Pix.</p>
                   )}
                   <button className="btn-primary w-full sm:w-auto" onClick={markPixAsPaidManually}>Marcar Pix como pago manualmente</button>
                 </div>
+                {import.meta.env.DEV && (
+                  <div className="rounded-lg border border-line bg-ink/50 p-3 text-xs leading-5 text-slate-300">
+                    <p className="font-black uppercase tracking-[0.14em] text-fitblue">Diagnostico Pix local</p>
+                    <p>Tem ticketUrl: {mercadoPagoPixInfo.ticketUrl ? 'sim' : 'nao'}</p>
+                    <p>Tem QR Code: {mercadoPagoPixInfo.qrCode ? 'sim' : 'nao'}</p>
+                    <p>Status: {mercadoPagoPixInfo.status || 'pending'}</p>
+                  </div>
+                )}
                 <p className="rounded-lg border border-fitblue/25 bg-fitblue/10 p-3 text-sm leading-6 text-slate-300">Apos o pagamento, a confirmacao pode levar alguns instantes. Confirmacao manual temporaria. Webhook automatico sera finalizado futuramente.</p>
               </div>
             </div>
