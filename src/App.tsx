@@ -4010,6 +4010,13 @@ function PersonalSettingsView({
   };
   const createMercadoPagoPixPayment = async (planId: AiPlanId) => {
     const plan = subscriptionPlans[planId];
+    const paymentWindow = (() => {
+      try {
+        return window.open('', '_blank');
+      } catch {
+        return null;
+      }
+    })();
     setMercadoPagoPixLoadingPlan(planId);
     setMercadoPagoPixMessage('');
     setMercadoPagoPixError('');
@@ -4059,6 +4066,11 @@ function PersonalSettingsView({
         expirationDate: String(result.expirationDate || '')
       };
       setMercadoPagoPixInfo(pixInfo);
+      if (pixInfo.ticketUrl && paymentWindow) {
+        paymentWindow.location.href = pixInfo.ticketUrl;
+      } else if (paymentWindow) {
+        paymentWindow.close();
+      }
       const nextSubscription = normalizeSubscriptionPlan({
         ...subscriptionPlan,
         planId,
@@ -4076,9 +4088,16 @@ function PersonalSettingsView({
       }, subscriptionPlan.userId);
       onManualSubscriptionSave(nextSubscription);
       setSubscriptionForm(nextSubscription);
-      setMercadoPagoPixMessage('Pix gerado com sucesso. Aguarde a confirmacao do pagamento.');
+      setMercadoPagoPixMessage(
+        pixInfo.ticketUrl
+          ? paymentWindow
+            ? 'Pix gerado com sucesso. Abrimos a pagina do Mercado Pago para voce concluir o pagamento.'
+            : 'Pix gerado com sucesso. Nao conseguimos abrir automaticamente. Clique em Abrir pagamento no Mercado Pago.'
+          : 'Pix gerado com sucesso. Use o QR Code ou o codigo Pix copia e cola para concluir o pagamento.'
+      );
       return true;
     } catch (error) {
+      if (paymentWindow) paymentWindow.close();
       setMercadoPagoPixError(error instanceof Error ? error.message : 'Nao foi possivel gerar Pix no Mercado Pago.');
       return false;
     } finally {
@@ -4344,6 +4363,11 @@ function PersonalSettingsView({
                 <h3 className="mt-2 text-xl font-black text-white">{mercadoPagoPixInfo.planName}</h3>
                 <p className="mt-1 text-sm text-slate-300">Valor: {formatCurrency(mercadoPagoPixInfo.price)}</p>
                 <p className="mt-1 text-sm text-slate-300">Status: Aguardando pagamento</p>
+                <p className="mt-2 rounded-lg border border-fitblue/25 bg-fitblue/10 p-3 text-sm leading-6 text-slate-200">
+                  {mercadoPagoPixInfo.ticketUrl
+                    ? 'A pagina do Mercado Pago foi aberta em uma nova aba. Se nao abriu, clique no botao abaixo.'
+                    : 'Use o QR Code ou o codigo Pix copia e cola abaixo para concluir o pagamento.'}
+                </p>
               </div>
               <Badge label="Mercado Pago Pix" />
             </div>
