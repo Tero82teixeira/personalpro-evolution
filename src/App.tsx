@@ -387,6 +387,110 @@ function normalizeSubscriptionPlan(value: Partial<SubscriptionPlan> | null | und
   };
 }
 
+function normalizeSubscriptionPlanId(value: unknown): AiPlanId {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (normalized === 'basic' || normalized === 'basico') return 'basic';
+  if (normalized === 'premium') return 'premium';
+  if (normalized === 'pro') return 'pro';
+  return 'admin-test';
+}
+
+function normalizeRemoteSubscriptionStatus(value: unknown): SubscriptionStatus | 'Aguardando pagamento' {
+  const raw = String(value ?? '').trim();
+  const normalized = raw.toLowerCase();
+  if (raw === 'Ativa' || normalized === 'active' || normalized === 'approved' || normalized === 'authorized') return 'Ativa';
+  if (raw === 'Vencida' || normalized === 'expired' || normalized === 'pending' || normalized === 'paused') return 'Vencida';
+  if (raw === 'Cancelada' || normalized === 'cancelled' || normalized === 'canceled') return 'Cancelada';
+  if (raw === 'Bloqueada' || normalized === 'blocked' || normalized === 'rejected') return 'Bloqueada';
+  if (raw === 'Em teste') return 'Em teste';
+  if (raw === 'Aguardando pagamento') return 'Aguardando pagamento';
+  return 'Vencida';
+}
+
+function mapSubscriptionFromSupabase(row: Record<string, any>, userId: string, fallback?: SubscriptionPlan): SubscriptionPlan | null {
+  const remoteStatus = normalizeRemoteSubscriptionStatus(row.status);
+  if (remoteStatus === 'Aguardando pagamento') return null;
+  const planId = normalizeSubscriptionPlanId(row.plan_id ?? row.planId);
+  const plan = subscriptionPlans[planId];
+  const periodEnd = String(row.current_period_end ?? row.currentPeriodEnd ?? '').slice(0, 10);
+  const startedAt = String(row.started_at ?? row.startedAt ?? row.created_at ?? '').slice(0, 10);
+  const updatedAt = String(row.updated_at ?? row.updatedAt ?? row.created_at ?? new Date().toISOString());
+  const gateway = String(row.gateway ?? '').includes('Pix') ? 'Mercado Pago Pix' : String(row.gateway ?? '').includes('Mercado Pago') ? 'Mercado Pago' : (fallback?.gateway ?? 'Manual');
+  const paymentMethodRaw = String(row.payment_method ?? row.paymentMethod ?? '').trim();
+  const paymentMethod = subscriptionPaymentMethods.includes(paymentMethodRaw as SubscriptionPaymentMethod)
+    ? paymentMethodRaw as SubscriptionPaymentMethod
+    : paymentMethodRaw.toLowerCase().includes('pix')
+      ? 'Pix'
+      : paymentMethodRaw.toLowerCase().includes('cart')
+        ? 'Cartao de credito'
+        : (fallback?.paymentMethod ?? 'Outro');
+
+  return normalizeSubscriptionPlan({
+    ...(fallback ?? createSubscriptionPlan(userId, planId)),
+    userId,
+    planId,
+    planName: row.plan_name || row.planName || plan.label,
+    status: remoteStatus,
+    maxStudents: plan.maxStudents,
+    aiLimit: plan.aiLimit,
+    monthlyValue: Number(row.amount ?? row.monthlyValue ?? parseSubscriptionPrice(plan.price)),
+    paymentMethod,
+    startedAt: startedAt || fallback?.startedAt,
+    dueDate: periodEnd || fallback?.dueDate,
+    renewsAt: periodEnd || fallback?.renewsAt,
+    nextRenewalDate: periodEnd || fallback?.nextRenewalDate,
+    gateway,
+    gatewaySubscriptionId: row.mercado_pago_payment_id || row.mercado_pago_preapproval_id || row.gatewaySubscriptionId || fallback?.gatewaySubscriptionId || '',
+    paymentStatus: row.last_event_status || row.paymentStatus || fallback?.paymentStatus || 'Manual',
+    paymentLink: fallback?.paymentLink ?? '',
+    paymentUpdatedAt: updatedAt,
+    notes: 'Assinatura sincronizada automaticamente pelo Mercado Pago.',
+    updatedAt
+  }, userId);
+}
+
+async function fetchLatestSupabaseSubscription(userId: string, fallback?: SubscriptionPlan) {
+  if (!supabase || !isSupabaseConfigured()) return null;
+  const { data, error } = await supabase
+    .from('subscriptions')
+    .select('*')
+    .eq('profile_id', userId)
+    .order('updated_at', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn('Assinatura Supabase nao encontrada/sincronizada:', { code: error.code, message: error.message });
+    return null;
+  }
+  if (!data) return null;
+  return mapSubscriptionFromSupabase(data as Record<string, any>, userId, fallback);
+}
+
+async function fetchAllSupabaseSubscriptions() {
+  if (!supabase || !isSupabaseConfigured()) return {};
+  const { data, error } = await supabase
+    .from('subscriptions')
+    .select('*')
+    .order('updated_at', { ascending: false });
+  if (error) {
+    console.warn('Assinaturas reais indisponiveis no Painel do Dono:', { code: error.code, message: error.message });
+    return {};
+  }
+  const mapped: Record<string, SubscriptionPlan> = {};
+  ((data ?? []) as Record<string, any>[]).forEach((row) => {
+    const profileId = String(row.profile_id ?? '').trim();
+    if (!profileId || mapped[profileId]) return;
+    const subscription = mapSubscriptionFromSupabase(row, profileId);
+    if (subscription) mapped[profileId] = subscription;
+  });
+  return mapped;
+}
+
 function loadSubscriptionPlan(userId: string): SubscriptionPlan {
   if (typeof window === 'undefined') return createSubscriptionPlan(userId);
   try {
@@ -1411,7 +1515,7 @@ type OwnerPersonalRow = {
   lastAccess: string;
 };
 
-function buildOwnerPersonalRows(data: AppData): OwnerPersonalRow[] {
+function buildOwnerPersonalRows(data: AppData, realSubscriptions: Record<string, SubscriptionPlan> = {}): OwnerPersonalRow[] {
   const admins = data.users.filter((item) => item.role === 'admin' && !isOwnerUser(item));
   const sourceUsers = admins.length ? admins : [
     { id: 'demo-owner-basic', name: 'Ronaldo Personal', email: 'ronaldo.personal@demo.com', password: '', role: 'admin' as const },
@@ -1420,7 +1524,7 @@ function buildOwnerPersonalRows(data: AppData): OwnerPersonalRow[] {
   ];
 
   return sourceUsers.map((admin, index) => {
-    let subscription = loadSubscriptionPlan(admin.id);
+    let subscription = realSubscriptions[admin.id] ?? loadSubscriptionPlan(admin.id);
     if (!admins.length && subscription.planId === 'admin-test') {
       const demoPlanId = (['basic', 'premium', 'pro'] as AiPlanId[])[index] ?? 'premium';
       subscription = normalizeSubscriptionPlan({
@@ -1447,12 +1551,17 @@ function SuperAdminArea({ user, data }: { user: User; data: AppData }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedPersonalId, setSelectedPersonalId] = useState('');
+  const [realSubscriptions, setRealSubscriptions] = useState<Record<string, SubscriptionPlan>>({});
   const [ownerPlans, setOwnerPlans] = useState(() => (['basic', 'premium', 'pro'] as AiPlanId[]).map((planId) => ({
     id: planId,
     ...subscriptionPlans[planId],
     featuresText: subscriptionPlans[planId].features.join('\n')
   })));
-  const rows = buildOwnerPersonalRows(data);
+  useEffect(() => {
+    fetchAllSupabaseSubscriptions().then(setRealSubscriptions);
+  }, [refreshKey]);
+
+  const rows = buildOwnerPersonalRows(data, realSubscriptions);
   const selectedRow = rows.find((row) => row.user.id === selectedPersonalId) ?? rows[0];
   const totalAiUsed = rows.reduce((sum, row) => sum + row.aiUsage.used, 0);
   const activePersonals = rows.filter((row) => getSubscriptionAccess(row.subscription).isActive).length;
@@ -1696,6 +1805,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
   const [selectedStudentId, setSelectedStudentId] = useState(data.students[0]?.id ?? '');
   const [subscriptionPlan, setSubscriptionPlan] = useState<SubscriptionPlan>(() => loadSubscriptionPlan(user.id));
   const [aiUsage, setAiUsage] = useState<AiUsage>(() => applySubscriptionToAiUsage(loadAiUsage(user.id), loadSubscriptionPlan(user.id)));
+  const [subscriptionSource, setSubscriptionSource] = useState<'Manual/local' | 'Supabase'>('Manual/local');
   const selectedStudent = data.students.find((student) => student.id === selectedStudentId);
   const handleSelectStudent = (studentId: string) => {
     setSelectedStudentId(studentId);
@@ -1715,11 +1825,26 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
     setSubscriptionPlan(nextSubscription);
     setAiUsage((current) => applySubscriptionToAiUsage(current, nextSubscription));
   };
+  const syncSupabaseSubscription = async (showAlert = true) => {
+    const current = loadSubscriptionPlan(user.id);
+    const remoteSubscription = await fetchLatestSupabaseSubscription(user.id, current);
+    if (!remoteSubscription) {
+      setSubscriptionSource('Manual/local');
+      if (showAlert) window.alert('Pagamento ainda não confirmado.');
+      return false;
+    }
+    saveSubscriptionState(remoteSubscription);
+    setSubscriptionSource('Supabase');
+    if (showAlert) window.alert('Assinatura sincronizada com sucesso.');
+    return true;
+  };
   const updateSubscriptionPlan = (planId: AiPlanId) => {
     const nextSubscription = createSubscriptionPlan(user.id, planId);
+    setSubscriptionSource('Manual/local');
     saveSubscriptionState(nextSubscription);
   };
   const updateManualSubscription = (subscription: SubscriptionPlan) => {
+    setSubscriptionSource('Manual/local');
     saveSubscriptionState(normalizeSubscriptionPlan({ ...subscription, updatedAt: new Date().toISOString() }, user.id));
   };
   const registerAiUsage = () => {
@@ -1734,6 +1859,9 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
     setMenuOpen(false);
     scrollToTop();
   };
+  useEffect(() => {
+    syncSupabaseSubscription(false);
+  }, [user.id]);
 
   return (
     <div className="mx-auto grid max-w-7xl gap-3 px-3 pb-28 pt-4 md:grid-cols-[240px_1fr] md:gap-5 md:px-6 md:py-5">
@@ -1768,7 +1896,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
         {tab === 'finance' && <FinanceView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'messages' && <MessagesView data={data} />}
         {tab === 'marketing' && <MarketingView data={data} />}
-        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} subscriptionPlan={subscriptionPlan} aiUsage={aiUsage} onSubscriptionChange={updateSubscriptionPlan} onManualSubscriptionSave={updateManualSubscription} />}
+        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} subscriptionPlan={subscriptionPlan} aiUsage={aiUsage} subscriptionSource={subscriptionSource} onRefreshPaymentStatus={() => syncSupabaseSubscription(true)} onSubscriptionChange={updateSubscriptionPlan} onManualSubscriptionSave={updateManualSubscription} />}
         {tab !== 'dashboard' && data.students.length === 0 && ['assessments', 'anamnesis', 'workouts', 'periodization', 'journey', 'evolution'].includes(tab) && (
           <Empty title="Base limpa" text="Cadastre um aluno para usar este módulo." />
         )}
@@ -3914,6 +4042,8 @@ function PersonalSettingsView({
   commit,
   subscriptionPlan,
   aiUsage,
+  subscriptionSource,
+  onRefreshPaymentStatus,
   onSubscriptionChange,
   onManualSubscriptionSave
 }: {
@@ -3921,6 +4051,8 @@ function PersonalSettingsView({
   commit: (data: AppData, message?: string) => void;
   subscriptionPlan: SubscriptionPlan;
   aiUsage: AiUsage;
+  subscriptionSource: 'Manual/local' | 'Supabase';
+  onRefreshPaymentStatus: () => Promise<boolean>;
   onSubscriptionChange: (planId: AiPlanId) => void;
   onManualSubscriptionSave: (subscription: SubscriptionPlan) => void;
 }) {
@@ -3945,6 +4077,7 @@ function PersonalSettingsView({
   const [mercadoPagoPixError, setMercadoPagoPixError] = useState('');
   const [mercadoPagoPixInfo, setMercadoPagoPixInfo] = useState<MercadoPagoPixInfo | null>(null);
   const [pixCopyFeedback, setPixCopyFeedback] = useState('');
+  const [isRefreshingPaymentStatus, setIsRefreshingPaymentStatus] = useState(false);
   const subscriptionUsage = getAiUsageSummary(aiUsage);
   const studentProgress = subscriptionPlan.maxStudents > 0 ? Math.min(100, Math.round((data.students.length / subscriptionPlan.maxStudents) * 100)) : 100;
   const statusClass = getSubscriptionStatusClass(subscriptionPlan.status);
@@ -4204,6 +4337,14 @@ function PersonalSettingsView({
     setIsSubscriptionEditing(false);
     window.alert('Assinatura atualizada com sucesso.');
   };
+  const refreshPaymentStatus = async () => {
+    setIsRefreshingPaymentStatus(true);
+    try {
+      await onRefreshPaymentStatus();
+    } finally {
+      setIsRefreshingPaymentStatus(false);
+    }
+  };
   const pixTicketUrlIsValid = mercadoPagoPixInfo?.ticketUrl ? isValidMercadoPagoPaymentUrl(mercadoPagoPixInfo.ticketUrl) : false;
 
   return (
@@ -4216,6 +4357,7 @@ function PersonalSettingsView({
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Plano atual</p>
                 <h3 className="mt-2 text-2xl font-black text-white">{subscriptionPlan.planName}</h3>
+                <p className="mt-2 text-sm font-semibold text-slate-300">Fonte da assinatura: {subscriptionSource}</p>
               </div>
               <span className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.12em] ${statusClass}`}>{subscriptionPlan.status}</span>
             </div>
@@ -4254,6 +4396,9 @@ function PersonalSettingsView({
             <div className="mt-4 flex flex-col gap-2 sm:flex-row">
               <button className="btn-primary w-full sm:w-auto" onClick={() => setShowPlans(!showPlans)}>
                 {showPlans ? 'Ocultar planos disponíveis' : 'Ver planos disponíveis'}
+              </button>
+              <button className="btn-secondary w-full sm:w-auto" onClick={refreshPaymentStatus} disabled={isRefreshingPaymentStatus}>
+                {isRefreshingPaymentStatus ? 'Atualizando status...' : 'Atualizar status do pagamento'}
               </button>
               {subscriptionPlan.planId !== 'admin-test' && (
                 <button className="btn-secondary w-full sm:w-auto" onClick={() => selectSubscriptionPlan('admin-test')}>Voltar para Teste/Admin</button>
