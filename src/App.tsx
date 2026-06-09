@@ -218,7 +218,7 @@ const subscriptionPaymentMethods: SubscriptionPaymentMethod[] = ['Pix', 'Cartao 
 const subscriptionPlans: Record<AiPlanId, { label: string; price: string; maxStudents: number; aiLimit: number; features: string[] }> = {
   basic: {
     label: 'Básico',
-    price: 'R$ 1,00/mês',
+    price: 'R$ 49/mês',
     maxStudents: 10,
     aiLimit: 0,
     features: ['Cadastro de alunos', 'Treinos', 'Avaliações', 'Check-ins', 'Controle de água', 'Evolução', 'Relatório normal', 'Sem IA real']
@@ -4431,9 +4431,6 @@ function PersonalSettingsView({
                 <div key={planId} className={`rounded-xl border p-4 ${highlighted ? 'border-fitblue/35 bg-fitblue/10 shadow-[0_18px_44px_rgba(14,165,233,0.12)]' : 'border-line bg-ink/45'}`}>
                   <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">{plan.label}</p>
                   <p className="mt-2 text-3xl font-black text-white">{plan.price}</p>
-                  {planId === 'basic' && (
-                    <p className="mt-2 rounded-lg border border-fitorange/30 bg-fitorange/10 p-2 text-sm font-semibold text-fitorange">Valor temporário para teste de pagamento.</p>
-                  )}
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     <InfoBox label="Alunos" value={plan.maxStudents} />
                     <InfoBox label="IA/mês" value={plan.aiLimit} />
@@ -4457,9 +4454,6 @@ function PersonalSettingsView({
                   <p className="text-xs font-black uppercase tracking-[0.14em] text-fitblue">Contratacao de plano</p>
                   <h3 className="mt-2 text-2xl font-black text-white">Contratar Plano {contractPlan.label}</h3>
                   <p className="mt-1 text-sm leading-6 text-slate-300">Escolha a forma de pagamento ou use o modo teste/manual.</p>
-                  {contractPlanId === 'basic' && (
-                    <p className="mt-3 rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">Valor temporário para teste de pagamento.</p>
-                  )}
                 </div>
                 <button className="btn-secondary w-full sm:w-auto" onClick={closeContractPanel}>Fechar</button>
               </div>
