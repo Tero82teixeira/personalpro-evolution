@@ -1937,8 +1937,8 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
   const whatsappUrl = buildPersonalWhatsAppUrl();
 
   return (
-    <div className="mx-auto max-w-4xl px-3 pb-32 pt-4 sm:px-4 md:pb-24 md:pt-5">
-      {tab === 'home' && <StudentDashboard data={data} student={student} />}
+    <div className="mx-auto max-w-5xl px-3 pb-36 pt-4 sm:px-4 md:pb-24 md:pt-5">
+      {tab === 'home' && <StudentDashboard data={data} student={student} onNavigate={selectTab} whatsappUrl={whatsappUrl} />}
       {tab === 'workout' && (
         <TrainingErrorBoundary key={`student-workout-${student.id}`} componentName="StudentWorkout">
           <StudentWorkout data={data} student={student} commit={commit} />
@@ -1948,19 +1948,8 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
       {tab === 'evolution' && <EvolutionView data={data} student={student} compact />}
       {tab === 'checkin' && <StudentCheckin data={data} student={student} commit={commit} />}
       {tab === 'profile' && <StudentProfile data={data} student={student} commit={commit} />}
-      <a
-        href={whatsappUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="student-whatsapp-button"
-        aria-label="Falar com o Personal pelo WhatsApp"
-        title={whatsappUrl}
-      >
-        <span aria-hidden="true">💬</span>
-        <span>Falar com o Personal</span>
-      </a>
-      <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-line bg-ink/95 px-2 py-2 backdrop-blur">
-        <div className="mx-auto grid max-w-4xl grid-cols-6 gap-1">
+      <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-fitblue/25 bg-slate-950/95 px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 shadow-[0_-16px_38px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+        <div className="mx-auto grid max-w-5xl grid-cols-6 gap-1">
           {studentTabs.map((item) => (
             <MobileTab key={item.id} active={tab === item.id} icon={item.icon} label={item.label} onClick={() => selectTab(item.id)} />
           ))}
@@ -5779,28 +5768,305 @@ function WorkoutLogHistory({
   );
 }
 
-function StudentDashboard({ data, student }: { data: AppData; student: Student }) {
-  const nextWorkout = data.workouts.find((item) => item.studentId === student.id && !item.completed);
-  const lastCheckIn = data.checkIns.filter((item) => item.studentId === student.id).sort((a, b) => b.date.localeCompare(a.date))[0];
-  const message = data.messages.find((item) => item.type === 'Motivação' || item.type === 'Motivacao');
+function WaterBottleProgress({ currentMl, goalMl }: { currentMl: number; goalMl: number }) {
+  const safeGoal = Math.max(1, goalMl || waterGoalLiters * 1000);
+  const safeCurrent = Math.max(0, currentMl || 0);
+  const progress = Math.min(100, Math.round((safeCurrent / safeGoal) * 100));
+  const extraMl = Math.max(0, safeCurrent - safeGoal);
+  const hasExtra = extraMl > 0;
+  const completed = safeCurrent >= safeGoal;
+
+  return (
+    <div className={`water-bottle-card min-h-[13rem] ${completed ? 'water-bottle-card-complete' : ''}`}>
+      {hasExtra && (
+        <div className="mb-2 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-emerald-200">
+          🏆 Meta superada
+        </div>
+      )}
+      <div className={`relative flex w-full max-w-[150px] flex-col items-center rounded-2xl border p-3 ${
+        hasExtra
+          ? 'border-emerald-300/80 bg-emerald-500/15 shadow-[0_0_34px_rgba(16,185,129,0.28)]'
+          : completed
+            ? 'border-emerald-400/70 bg-emerald-500/10 shadow-[0_0_28px_rgba(16,185,129,0.22)]'
+            : 'border-fitblue/50 bg-fitblue/10 shadow-[0_0_22px_rgba(56,189,248,0.16)]'
+      }`}>
+        <div className="mb-1 h-3 w-12 rounded-t-lg border border-fitblue/50 bg-slate-700/80 shadow-inner" />
+        <div className="relative h-40 w-20 overflow-hidden rounded-[1.55rem] border border-fitblue/60 bg-slate-950/80 shadow-[inset_10px_0_22px_rgba(255,255,255,0.08),inset_-10px_0_22px_rgba(0,0,0,0.35),0_18px_40px_rgba(14,165,233,0.18)]">
+          <div
+            className="absolute bottom-0 left-0 right-0 rounded-b-[1.4rem] bg-gradient-to-t from-blue-700 via-sky-400 to-cyan-200 transition-all duration-500 ease-out"
+            style={{ height: `${progress}%` }}
+          >
+            <div className="absolute -top-2 left-[-25%] h-5 w-[150%] rounded-[50%] bg-cyan-100/55 blur-[1px]" />
+            <div className="absolute left-2 top-3 h-[80%] w-3 rounded-full bg-white/25 blur-[1px]" />
+            <div className="absolute right-2 top-6 h-[60%] w-2 rounded-full bg-blue-900/20 blur-[1px]" />
+          </div>
+          <div className="absolute left-3 top-4 h-24 w-3 rounded-full bg-white/20 blur-[1px]" />
+          <div className="pointer-events-none absolute inset-0 rounded-[1.55rem] bg-gradient-to-r from-white/20 via-transparent to-black/25" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="rounded-full bg-slate-950/40 px-2.5 py-1 text-lg font-black text-white drop-shadow">
+              {progress}%
+            </span>
+          </div>
+        </div>
+        <p className="mt-3 text-center text-xs font-semibold text-slate-200">
+          {formatLiters(safeCurrent / 1000)} / {formatLiters(safeGoal / 1000)}
+        </p>
+        {hasExtra && <p className="mt-1 text-center text-xs font-black text-emerald-200">Extra: +{formatLiters(extraMl / 1000)}</p>}
+      </div>
+    </div>
+  );
+}
+
+function StudentDashboard({
+  data,
+  student,
+  onNavigate,
+  whatsappUrl
+}: {
+  data: AppData;
+  student: Student;
+  onNavigate: (tab: StudentTab) => void;
+  whatsappUrl: string;
+}) {
+  const [waterRecords, setWaterRecords] = useState<WaterRecord[]>(() => loadWaterRecords());
+  const { goals } = useWeeklyGoalsStore();
+  const today = todayKey();
+  const week = getCurrentWeekRange();
+  const studentName = studentDisplayName(student);
+  const firstName = studentName.split(' ')[0] || studentName;
+  const workouts = (Array.isArray(data.workouts) ? data.workouts : []).map(normalizeWorkout).filter((item) => item.studentId === student.id);
+  const nextWorkout = workouts.find((item) => !item.completed) ?? workouts[0];
+  const workoutLogs = workoutLogsForStudent(data, student.id);
+  const latestWorkoutLog = workoutLogs[0];
+  const latestWorkoutDateTime = formatDateTimeParts(latestWorkoutLog?.completedAt);
+  const weekWorkoutLogs = workoutLogs.filter((log) => isDateBetween(getWorkoutLogCompletedAt(log), week.start, week.end));
+  const studentCheckIns = data.checkIns
+    .filter((item) => item.studentId === student.id)
+    .sort((a, b) => getCheckInDateValue(b).localeCompare(getCheckInDateValue(a)));
+  const checkedInToday = studentCheckIns.some((item) => dateKey(getCheckInDateValue(item)) === today);
+  const weekCheckIns = studentCheckIns.filter((item) => isDateBetween(getCheckInDateValue(item), week.start, week.end));
+  const todayWater = getWaterRecord(waterRecords, student.id, today);
+  const waterProgress = Math.min(100, Math.round((todayWater.waterConsumed / todayWater.waterGoal) * 100));
+  const waterCompleted = todayWater.waterConsumed >= todayWater.waterGoal;
+  const waterExtra = Math.max(0, todayWater.waterConsumed - todayWater.waterGoal);
+  const weekWaterDays = waterRecords.filter((record) => record.studentId === student.id && isDateBetween(record.date, week.start, week.end) && record.waterConsumed >= record.waterGoal).length;
+  const weeklyGoals = getStudentWeeklyGoals(goals, student.id, data, waterRecords);
+  const currentWeeklyGoals = weeklyGoals.filter((goal) => goal.weekEndDate >= week.start && goal.weekStartDate <= week.end);
+  const visibleWeeklyGoal = currentWeeklyGoals[0] ?? weeklyGoals[0];
+  const completedWeeklyGoals = currentWeeklyGoals.filter((goal) => goal.status === 'Concluída').length;
+  const weeklySignals = [
+    weekWorkoutLogs.length > 0,
+    weekCheckIns.length > 0,
+    waterCompleted || weekWaterDays > 0,
+    currentWeeklyGoals.length ? completedWeeklyGoals > 0 : false
+  ];
+  const weekProgress = Math.round((weeklySignals.filter(Boolean).length / weeklySignals.length) * 100);
+  const personalMessage =
+    data.messages.find((item) => item.type === 'Motivação' || item.type === 'Motivacao' || item.type === 'Mensagem do Personal')?.content ||
+    'Continue firme. Pequenas ações todos os dias constroem grandes resultados.';
+  const evolutionSummary = getStudentEvolutionSummary(student, data.assessments);
+  const hasWeightEvolution = Boolean(Number(evolutionSummary.currentWeight || 0) && Number(evolutionSummary.initialWeight || 0));
+  const evolutionDiff = hasWeightEvolution ? Number(evolutionSummary.currentWeight) - Number(evolutionSummary.initialWeight) : 0;
+  const hasSmartData = Boolean(workoutLogs.length || studentCheckIns.length || data.assessments.some((assessment) => getAssessmentStudentId(assessment) === student.id));
+  const smartSummary = hasSmartData
+    ? 'Você está em acompanhamento ativo. Continue registrando treinos, água e check-ins para melhorar sua evolução.'
+    : 'Registre treinos, check-ins e avaliações para liberar uma leitura mais completa.';
+
+  const handleWaterQuickAdd = (amount: number) => {
+    const current = getWaterRecord(waterRecords, student.id, today);
+    const nextRecord = {
+      ...current,
+      waterGoal: current.waterGoal || waterGoalLiters,
+      waterConsumed: normalizeWaterValue(current.waterConsumed + amount)
+    };
+    const nextRecords = [
+      ...waterRecords.filter((record) => !(record.studentId === student.id && record.date === current.date)),
+      nextRecord
+    ];
+    saveWaterRecords(nextRecords);
+    setWaterRecords(nextRecords);
+  };
+
   return (
     <Stack>
-      <section className="rounded-lg border border-line bg-[linear-gradient(135deg,#0d1726,#112a2a)] p-5 shadow-glow">
-        <p className="text-sm text-fitgreen">Olá, {studentDisplayName(student).split(' ')[0]}</p>
-        <h1 className="mt-2 text-3xl font-black">Seu plano está em movimento.</h1>
-        <p className="mt-3 text-slate-300">{student.goal}</p>
+      <section className="overflow-hidden rounded-[1.6rem] border border-fitblue/30 bg-[radial-gradient(circle_at_top_left,rgba(25,151,255,0.28),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(53,230,140,0.14),transparent_30%),linear-gradient(135deg,#08111f,#10262f_58%,#10241e)] p-5 shadow-glow md:p-7">
+        <p className="text-base font-semibold text-fitgreen">Olá, {firstName} 👋</p>
+        <h1 className="mt-2 text-3xl font-black leading-tight text-white md:text-4xl">Hoje é um bom dia para evoluir.</h1>
+        <p className="mt-3 max-w-2xl text-base leading-7 text-slate-300">Seu personal está acompanhando sua evolução. Complete pequenas ações hoje e mantenha sua semana em movimento.</p>
+        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+          <InfoBox label="Semana atual" value={`${weekProgress}%`} />
+          <InfoBox label="Treinos na semana" value={weekWorkoutLogs.length} />
+          <InfoBox label="Check-in de hoje" value={checkedInToday ? 'Em dia' : 'Pendente'} />
+        </div>
       </section>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <StatCard label="Próximo treino" value={nextWorkout?.name ?? 'Aguardando'} icon={Dumbbell} accent="blue" />
-        <StatCard label="Progresso" value={`${Math.max(0, student.initialWeight - student.currentWeight).toFixed(1)} kg`} icon={LineChart} accent="green" />
-        <StatCard label="Peso inicial" value={`${student.initialWeight} kg`} icon={Activity} accent="orange" />
-        <StatCard label="Peso atual" value={`${student.currentWeight} kg`} icon={Activity} accent="green" />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="🏋️ Próximo treino">
+          {nextWorkout ? (
+            <div className="space-y-4">
+              <div>
+                <p className="text-2xl font-black text-white">{nextWorkout.name || 'Treino sem nome'}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-300">{nextWorkout.objective || 'Treino liberado pelo seu personal.'}</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <InfoBox label="Último treino realizado" value={latestWorkoutLog ? workoutName(data, latestWorkoutLog.workoutId) : 'Sem registros'} />
+                <InfoBox label="Data do último treino" value={latestWorkoutLog ? latestWorkoutDateTime.date : 'Sem registros'} />
+                <InfoBox label="Status" value={nextWorkout.completed ? 'Concluído' : 'Disponível'} />
+                <InfoBox label="Duração estimada" value={nextWorkout.estimatedDuration || 'Não informada'} />
+              </div>
+              <button className="btn-primary w-full sm:w-auto" onClick={() => onNavigate('workout')}>Ver treino</button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-base leading-7 text-slate-300">Seu personal ainda não cadastrou um treino para você.</p>
+              <button className="btn-secondary w-full sm:w-auto" onClick={() => onNavigate('workout')}>Ver treinos</button>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="📈 Progresso da semana">
+          <div className="flex min-h-[21rem] flex-col justify-between space-y-5">
+            <div>
+              <div className="flex items-end justify-between gap-3">
+                <p className="text-5xl font-black text-white">{weekProgress}%</p>
+                <p className="text-sm font-semibold text-slate-400">Semana atual</p>
+              </div>
+              <div className="mt-4 h-4 overflow-hidden rounded-full border border-fitblue/20 bg-slate-800">
+                <div className="h-full rounded-full bg-gradient-to-r from-fitblue to-fitgreen transition-all" style={{ width: `${weekProgress}%` }} />
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <InfoBox label="🏋️ Treinos concluídos" value={weekWorkoutLogs.length} />
+              <InfoBox label="📋 Check-ins respondidos" value={weekCheckIns.length} />
+              <InfoBox label="🎯 Metas concluídas" value={completedWeeklyGoals} />
+              <InfoBox label="💧 Água batida" value={`${weekWaterDays} dia(s)`} />
+            </div>
+            {!weekWorkoutLogs.length && !weekCheckIns.length && !weekWaterDays && !completedWeeklyGoals && (
+              <div className="rounded-2xl border border-fitblue/25 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_42%),rgba(14,165,233,0.08)] p-4">
+                <p className="text-base font-black text-white">Ainda sem progresso registrado nesta semana.</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  Conclua treinos, responda check-ins e registre água para acompanhar sua evolução.
+                </p>
+              </div>
+            )}
+          </div>
+        </Panel>
+
+        <Panel title="💧 Água de hoje">
+          <div className="grid min-h-[22rem] gap-5 md:grid-cols-[1.15fr_0.85fr] md:items-center">
+            <div className="space-y-4 md:pr-1">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-3xl font-black text-white">{formatLiters(todayWater.waterConsumed)}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-400">Meta diária: {formatLiters(todayWater.waterGoal)}</p>
+                </div>
+                <Badge label={`${waterProgress}%`} />
+              </div>
+              <div className="h-4 overflow-hidden rounded-full border border-fitblue/20 bg-slate-800">
+                <div className="h-full rounded-full bg-gradient-to-r from-fitblue via-cyan-300 to-fitgreen transition-all" style={{ width: `${waterProgress}%` }} />
+              </div>
+              <div className="space-y-2 rounded-2xl border border-fitblue/15 bg-fitblue/5 p-2">
+                <div>
+                  <p className="mb-2 text-xs font-black uppercase tracking-[0.12em] text-fitgreen">Adicionar</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button className="btn-secondary min-h-12 justify-center" onClick={() => handleWaterQuickAdd(0.25)}>+250ml</button>
+                    <button className="btn-secondary min-h-12 justify-center" onClick={() => handleWaterQuickAdd(0.5)}>+500ml</button>
+                    <button className="btn-secondary min-h-12 justify-center" onClick={() => handleWaterQuickAdd(1)}>+1L</button>
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-xs font-black uppercase tracking-[0.12em] text-slate-400">Diminuir</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button className="btn-secondary min-h-12 justify-center" onClick={() => handleWaterQuickAdd(-0.25)}>-250ml</button>
+                    <button className="btn-secondary min-h-12 justify-center" onClick={() => handleWaterQuickAdd(-0.5)}>-500ml</button>
+                    <button className="btn-secondary min-h-12 justify-center" onClick={() => handleWaterQuickAdd(-1)}>-1L</button>
+                  </div>
+                </div>
+              </div>
+              <p className={`rounded-xl border p-4 text-sm font-semibold ${waterExtra > 0 ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200' : waterCompleted ? 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen' : 'border-fitblue/30 bg-fitblue/10 text-slate-200'}`}>
+                {waterExtra > 0 ? `Meta superada. Extra: +${formatLiters(waterExtra)}` : waterCompleted ? 'Meta de água concluída hoje ✅' : 'Continue hidratando para bater sua meta de hoje.'}
+              </p>
+            </div>
+            <div className="mx-auto w-full max-w-[18rem] md:max-w-none">
+              <WaterBottleProgress currentMl={todayWater.waterConsumed * 1000} goalMl={todayWater.waterGoal * 1000} />
+            </div>
+          </div>
+        </Panel>
+
+        <Panel title="✅ Check-in">
+          <div className="flex min-h-[21rem] flex-col justify-between space-y-5">
+            <p className={`rounded-xl border p-4 text-base font-semibold leading-7 ${checkedInToday ? 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen' : 'border-fitorange/40 bg-fitorange/10 text-fitorange'}`}>
+              {checkedInToday ? 'Check-in em dia.' : 'Você tem um check-in pendente.'}
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <InfoBox label="Último check-in" value={studentCheckIns[0] ? formatDate(getCheckInDateValue(studentCheckIns[0])) : 'Sem registros'} />
+              <InfoBox label="Motivação" value={studentCheckIns[0]?.motivation ? `${studentCheckIns[0].motivation}/10` : 'Sem registro'} />
+              <InfoBox label="Status" value={checkedInToday ? 'Concluído' : 'Pendente'} />
+            </div>
+            <button className={checkedInToday ? 'btn-secondary w-full sm:w-auto' : 'btn-primary w-full sm:w-auto'} onClick={() => onNavigate('checkin')}>
+              {checkedInToday ? 'Ver histórico' : 'Responder check-in'}
+            </button>
+          </div>
+        </Panel>
+
+        <Panel title="🎯 Meta semanal">
+          {visibleWeeklyGoal ? (
+            <div className="min-h-[18rem] space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xl font-black text-white">{visibleWeeklyGoal.title || 'Meta semanal'}</p>
+                  <p className="mt-1 text-sm text-slate-400">{visibleWeeklyGoal.category} - {visibleWeeklyGoal.currentValue}/{visibleWeeklyGoal.targetValue} {visibleWeeklyGoal.unit}</p>
+                </div>
+                <span className={`rounded-full border px-3 py-1 text-xs font-black ${weeklyGoalStatusClass(visibleWeeklyGoal.status)}`}>{visibleWeeklyGoal.status}</span>
+              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-slate-800">
+                <div className="h-full rounded-full bg-gradient-to-r from-fitgreen to-fitblue transition-all" style={{ width: `${visibleWeeklyGoal.progress}%` }} />
+              </div>
+              {visibleWeeklyGoal.notes && <p className="text-sm leading-6 text-slate-300">{visibleWeeklyGoal.notes}</p>}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-base leading-7 text-slate-300">Seu personal ainda não definiu metas para esta semana.</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {['Treino', 'Água', 'Check-in', 'Hábitos'].map((item) => (
+                  <div key={item} className="rounded-xl border border-fitblue/15 bg-fitblue/5 p-3">
+                    <p className="text-sm font-black text-white">{item}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-400">Aguardando</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="💬 Mensagem do Personal">
+          <div className="space-y-4">
+            <blockquote className="rounded-lg border border-line bg-ink/40 p-4 text-base leading-7 text-slate-200">
+              “{personalMessage}”
+            </blockquote>
+            {whatsappUrl ? (
+              <a className="btn-primary w-full sm:w-auto" href={whatsappUrl} target="_blank" rel="noopener noreferrer">Chamar personal no WhatsApp</a>
+            ) : (
+              <p className="rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm text-fitorange">WhatsApp do personal não cadastrado.</p>
+            )}
+          </div>
+        </Panel>
       </div>
-      <Panel title="Meta e check-in">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <InfoBox label="Meta" value={student.target} />
-          <InfoBox label="Último check-in" value={lastCheckIn ? formatDate(lastCheckIn.date) : 'Pendente'} />
-          <InfoBox label="Mensagem do personal" value={message?.content ?? 'Mantenha a consistencia.'} />
+
+      <Panel title="🤖 Resumo inteligente">
+        <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+          <div>
+            <div className="mb-4 w-fit rounded-full border border-fitgreen/30 bg-fitgreen/10 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-fitgreen">
+              Status: {hasSmartData ? 'Acompanhamento ativo' : 'Primeiros registros'}
+            </div>
+            <p className="text-base leading-7 text-slate-300">{smartSummary}</p>
+            <button className="btn-secondary mt-4 w-full sm:w-auto" onClick={() => onNavigate('evolution')}>Ver relatório inteligente</button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+            <InfoBox label="Peso atual" value={evolutionSummary.currentWeight ? `${evolutionSummary.currentWeight} kg` : 'Sem registro'} />
+            <InfoBox label="Diferença" value={hasWeightEvolution ? `${evolutionDiff > 0 ? '+' : ''}${evolutionDiff.toFixed(1)} kg` : 'Sem registro'} />
+            <InfoBox label="Objetivo" value={student.target || student.goal || 'Sem registro'} />
+          </div>
         </div>
       </Panel>
     </Stack>
@@ -6130,9 +6396,9 @@ function NavButton({ active, icon: Icon, label, onClick }: { active: boolean; ic
 
 function MobileTab({ active, icon: Icon, label, onClick }: { active: boolean; icon: IconComponent; label: string; onClick: () => void }) {
   return (
-    <button className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[10px] font-bold sm:text-[11px] ${active ? 'bg-[linear-gradient(135deg,#38bdf8,#35e68c)] text-ink shadow-[0_8px_22px_rgba(53,230,140,.22)]' : 'text-slate-400'}`} onClick={onClick}>
-      <Icon size={18} />
-      <span className="truncate">{label}</span>
+    <button className={`flex min-h-[3.8rem] flex-col items-center justify-center gap-1 rounded-2xl border px-1 py-2 text-[10px] font-black leading-tight transition min-[380px]:text-[11px] sm:text-xs ${active ? 'border-cyan-200/60 bg-[linear-gradient(135deg,#0ea5e9,#06b6d4_48%,#22c55e)] text-white shadow-[0_10px_26px_rgba(53,230,140,.3)] [text-shadow:0_1px_8px_rgba(0,0,0,.35)]' : 'border-transparent bg-slate-900/35 text-slate-300 hover:border-fitblue/25 hover:bg-fitblue/10 hover:text-white'}`} onClick={onClick}>
+      <Icon size={19} className={active ? 'text-white' : 'text-slate-300'} />
+      <span className="max-w-full truncate">{label}</span>
     </button>
   );
 }

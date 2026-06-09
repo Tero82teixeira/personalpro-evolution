@@ -163,6 +163,14 @@
     outline-offset: 3px;
   }
 
+  @media (max-width: 768px) {
+    .student-whatsapp-button {
+      display: none !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+  }
+
   @media (min-width: 768px) {
     .student-whatsapp-button {
       right: 24px !important;
