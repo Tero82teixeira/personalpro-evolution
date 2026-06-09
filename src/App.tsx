@@ -6163,6 +6163,77 @@ function formatTimer(seconds: number) {
   return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
 }
 
+type ExerciseLibraryEntry = {
+  tags: string[];
+  instructions: string;
+  primaryMuscles: string[];
+  secondaryMuscles: string[];
+  commonErrors: string[];
+  substitutions: string[];
+  mediaUrl?: string;
+};
+
+const exerciseLibrary: Record<string, ExerciseLibraryEntry> = {
+  agachamento: {
+    tags: ['Força', 'Hipertrofia'],
+    instructions: 'Desça com controle, mantendo o tronco firme, joelhos alinhados e pés bem apoiados. Suba empurrando o chão sem perder a postura.',
+    primaryMuscles: ['Quadríceps', 'Glúteos'],
+    secondaryMuscles: ['Posterior de coxa', 'Core'],
+    commonErrors: ['Inclinar demais o tronco', 'Deixar os joelhos colapsarem para dentro', 'Descer rápido demais', 'Usar carga acima da técnica'],
+    substitutions: ['Leg press', 'Agachamento com halter', 'Cadeira extensora']
+  },
+  supino: {
+    tags: ['Força', 'Hipertrofia'],
+    instructions: 'Mantenha as escápulas firmes, controle a descida da barra ou halteres e empurre sem perder a estabilidade dos ombros.',
+    primaryMuscles: ['Peitoral'],
+    secondaryMuscles: ['Tríceps', 'Ombros'],
+    commonErrors: ['Abrir demais os cotovelos', 'Tirar os ombros do banco', 'Bater a barra no peito', 'Perder controle na descida'],
+    substitutions: ['Supino com halteres', 'Flexão de braço', 'Máquina de peitoral']
+  },
+  remada: {
+    tags: ['Força', 'Postura'],
+    instructions: 'Puxe com as costas, mantenha o tronco estável e evite compensar com balanço. Faça a volta com controle.',
+    primaryMuscles: ['Costas'],
+    secondaryMuscles: ['Bíceps', 'Posterior de ombro'],
+    commonErrors: ['Balançar o tronco', 'Puxar só com o braço', 'Encolher os ombros', 'Soltar o peso rápido demais'],
+    substitutions: ['Puxada na frente', 'Remada baixa', 'Remada unilateral']
+  },
+  desenvolvimento: {
+    tags: ['Força', 'Ombros'],
+    instructions: 'Empurre a carga acima da cabeça mantendo abdômen firme, punhos alinhados e controle total na descida.',
+    primaryMuscles: ['Ombros'],
+    secondaryMuscles: ['Tríceps', 'Core'],
+    commonErrors: ['Arquear demais a lombar', 'Perder alinhamento dos punhos', 'Subir com impulso excessivo', 'Descer sem controle'],
+    substitutions: ['Elevação lateral', 'Desenvolvimento com halteres', 'Máquina de ombro']
+  }
+};
+
+function getExerciseLibraryEntry(exercise: Exercise): ExerciseLibraryEntry {
+  const source = `${exercise.name || ''} ${exercise.muscleGroup || ''}`.toLowerCase();
+  const match = Object.entries(exerciseLibrary).find(([keyword]) => source.includes(keyword));
+  return match?.[1] ?? {
+    tags: ['Técnica', 'Controle'],
+    instructions: 'Execute o movimento com controle, mantendo postura firme e respiração regular. Evite aceleração excessiva e preserve a técnica.',
+    primaryMuscles: exercise.muscleGroup ? [exercise.muscleGroup] : [],
+    secondaryMuscles: [],
+    commonErrors: ['Evitar compensar com a lombar', 'Não executar rápido demais', 'Não usar carga acima da sua técnica'],
+    substitutions: []
+  };
+}
+
+function getExerciseMediaUrl(exercise: Exercise) {
+  const source = exercise as Exercise & { gifUrl?: string; imageUrl?: string; mediaUrl?: string };
+  return source.videoUrl || source.gifUrl || source.imageUrl || source.mediaUrl || '';
+}
+
+function isImageMedia(url: string) {
+  return /\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(url);
+}
+
+function isVideoMedia(url: string) {
+  return /\.(mp4|webm|ogg)(\?.*)?$/i.test(url);
+}
+
 function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: AppData; student: Student; commit: (data: AppData, message?: string) => void; whatsappUrl?: string }) {
   const allWorkouts = (Array.isArray(data.workouts) ? data.workouts : []).map(normalizeWorkout);
   const workouts = allWorkouts.filter((item) => item.studentId === student.id);
@@ -6178,6 +6249,11 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
   const [timerSeconds, setTimerSeconds] = useState(0);
   const [timerRunning, setTimerRunning] = useState(false);
   const [restSoundEnabled, setRestSoundEnabled] = useState(loadRestSoundEnabled);
+  const [showSubstitutionHelp, setShowSubstitutionHelp] = useState(false);
+  const [exerciseDetailTab, setExerciseDetailTab] = useState<'execution' | 'muscles' | 'substitutions' | 'notes'>('execution');
+  const [substitutionReason, setSubstitutionReason] = useState('');
+  const [noteSavedMessage, setNoteSavedMessage] = useState('');
+  const selectedExerciseCurrent = selectedExercise ? exercises.find((exercise) => exercise.id === selectedExercise.id) ?? selectedExercise : null;
 
   useEffect(() => {
     if (!timerRunning || timerSeconds <= 0) return;
@@ -6337,7 +6413,7 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
                   <button className={done ? 'btn-secondary w-full' : 'btn-primary w-full'} onClick={() => toggleExercise(exercise)}>
                     {done ? 'Desmarcar' : 'Concluir exercício'}
                   </button>
-                  <button className="btn-secondary w-full" onClick={() => setSelectedExercise(exercise)}>Detalhes</button>
+                  <button className="btn-secondary w-full" onClick={() => { setSelectedExercise(exercise); setShowSubstitutionHelp(false); setExerciseDetailTab('execution'); setSubstitutionReason(''); setNoteSavedMessage(''); }}>Detalhes</button>
                   <button className="btn-secondary w-full" onClick={() => startRestTimer(exercise)}>Iniciar descanso</button>
                 </div>
               </div>
@@ -6393,44 +6469,178 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
 
       {selectedExercise && (
         <div className="fixed inset-0 z-50 grid place-items-end bg-black/70 p-3 backdrop-blur sm:place-items-center">
-          <section className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-2xl border border-fitblue/30 bg-slate-950 p-5 shadow-[0_24px_70px_rgba(0,0,0,.5)]">
+          <section className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-fitblue/30 bg-slate-950 shadow-[0_24px_70px_rgba(0,0,0,.5)]">
+            <div className="border-b border-fitblue/20 p-4 sm:p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-fitblue">Detalhes do exercício</p>
                 <h2 className="mt-2 text-2xl font-black text-white">{selectedExercise.name || 'Exercício sem nome'}</h2>
                 <p className="mt-1 text-sm font-semibold text-slate-400">{selectedExercise.muscleGroup || 'Geral'}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {getExerciseLibraryEntry(selectedExercise).tags.map((tag) => (
+                    <span key={tag} className="rounded-full border border-fitblue/30 bg-fitblue/10 px-3 py-1 text-xs font-black text-fitblue">{tag}</span>
+                  ))}
+                </div>
               </div>
               <button className="icon-btn" onClick={() => setSelectedExercise(null)}><X size={18} /></button>
             </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              <InfoBox label="Séries" value={selectedExercise.sets || 'Não informado'} />
-              <InfoBox label="Repetições" value={selectedExercise.reps || 'Não informado'} />
-              <InfoBox label="Carga sugerida" value={selectedExercise.load || 'A definir'} />
-              <InfoBox label="Descanso" value={selectedExercise.rest || 'A definir'} />
+              <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+                {[
+                  ['execution', 'Execução'],
+                  ['muscles', 'Músculos'],
+                  ['substitutions', 'Substituições'],
+                  ['notes', 'Anotações']
+                ].map(([id, label]) => (
+                  <button
+                    key={id}
+                    className={`rounded-full border px-4 py-2 text-sm font-black transition ${exerciseDetailTab === id ? 'border-cyan-200/60 bg-[linear-gradient(135deg,#0ea5e9,#22c55e)] text-white shadow-[0_8px_24px_rgba(56,189,248,0.24)]' : 'border-fitblue/20 bg-fitblue/5 text-slate-300'}`}
+                    onClick={() => setExerciseDetailTab(id as typeof exerciseDetailTab)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="mt-5 space-y-3">
+
+            <div className="flex-1 overflow-auto p-4 sm:p-5">
+              {exerciseDetailTab === 'execution' && (
+                <div className="space-y-3">
+                  <div className="overflow-hidden rounded-2xl border border-fitblue/25 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.18),transparent_42%),rgba(15,23,42,0.72)]">
+                    {(() => {
+                      const mediaUrl = getExerciseMediaUrl(selectedExercise);
+                      if (mediaUrl && isVideoMedia(mediaUrl)) {
+                        return <video className="aspect-video w-full bg-black object-cover" src={mediaUrl} controls playsInline />;
+                      }
+                      if (mediaUrl && isImageMedia(mediaUrl)) {
+                        return <img className="aspect-video w-full object-cover" src={mediaUrl} alt={`Demonstração de ${selectedExercise.name || 'exercício'}`} />;
+                      }
+                      return (
+                        <div className="grid min-h-52 place-items-center p-6 text-center">
+                          <div>
+                            <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-fitblue/30 bg-fitblue/10 text-3xl">🏋️</div>
+                            <p className="mt-4 text-xl font-black text-white">{selectedExercise.name || 'Exercício'}</p>
+                            <p className="mt-2 text-sm leading-6 text-slate-300">Demonstração visual indisponível no momento.</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">Seu personal poderá adicionar imagem ou vídeo futuramente.</p>
+                            {mediaUrl && <a className="btn-secondary mt-4" href={mediaUrl} target="_blank" rel="noopener noreferrer">Ver demonstração</a>}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <InfoBox label="Séries" value={selectedExercise.sets || 'Não informado'} />
+                    <InfoBox label="Repetições" value={selectedExercise.reps || 'Não informado'} />
+                    <InfoBox label="Carga sugerida" value={selectedExercise.load || 'A definir'} />
+                    <InfoBox label="Descanso" value={selectedExercise.rest || 'A definir'} />
+                  </div>
               <div className="rounded-xl border border-line bg-ink/40 p-4">
-                <p className="text-sm font-black text-white">Instruções</p>
-                <p className="mt-2 text-sm leading-6 text-slate-300">Execute o movimento com controle, mantendo postura firme e respeitando sua amplitude segura.</p>
+                <p className="text-sm font-black text-white">Como executar</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">{getExerciseLibraryEntry(selectedExercise).instructions}</p>
               </div>
               <div className="rounded-xl border border-line bg-ink/40 p-4">
                 <p className="text-sm font-black text-white">Observações do personal</p>
                 <p className="mt-2 text-sm leading-6 text-slate-300">{selectedExercise.notes || 'Sem observações do personal.'}</p>
               </div>
+                </div>
+              )}
+
+              {exerciseDetailTab === 'muscles' && (
+                <div className="space-y-3">
               <div className="rounded-xl border border-line bg-ink/40 p-4">
                 <p className="text-sm font-black text-white">Músculos trabalhados</p>
-                <p className="mt-2 text-sm leading-6 text-slate-300">{selectedExercise.muscleGroup || 'Geral'}</p>
+                {getExerciseLibraryEntry(selectedExercise).primaryMuscles.length || getExerciseLibraryEntry(selectedExercise).secondaryMuscles.length ? (
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.12em] text-fitgreen">Principais</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {getExerciseLibraryEntry(selectedExercise).primaryMuscles.map((muscle) => <span key={muscle} className="rounded-full border border-fitgreen/30 bg-fitgreen/10 px-3 py-1 text-xs font-bold text-fitgreen">{muscle}</span>)}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.12em] text-slate-400">Secundários</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(getExerciseLibraryEntry(selectedExercise).secondaryMuscles.length ? getExerciseLibraryEntry(selectedExercise).secondaryMuscles : ['A definir']).map((muscle) => <span key={muscle} className="rounded-full border border-fitblue/25 bg-fitblue/10 px-3 py-1 text-xs font-bold text-slate-200">{muscle}</span>)}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm leading-6 text-slate-300">Informação muscular não cadastrada.</p>
+                )}
               </div>
               <div className="rounded-xl border border-line bg-ink/40 p-4">
                 <p className="text-sm font-black text-white">Erros comuns</p>
-                <p className="mt-2 text-sm leading-6 text-slate-300">Evitar compensar com a lombar, prender a respiração ou executar rápido demais.</p>
+                {getExerciseLibraryEntry(selectedExercise).commonErrors.length ? (
+                  <ul className="mt-2 space-y-2 text-sm leading-6 text-slate-300">
+                    {getExerciseLibraryEntry(selectedExercise).commonErrors.slice(0, 4).map((error) => <li key={error}>• {error}</li>)}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-sm leading-6 text-slate-300">Sem erros comuns cadastrados para este exercício.</p>
+                )}
               </div>
+                </div>
+              )}
+
+              {exerciseDetailTab === 'substitutions' && (
+                <div className="space-y-3">
+              <div className="rounded-xl border border-line bg-ink/40 p-4">
+                <p className="text-sm font-black text-white">Substituições possíveis</p>
+                {getExerciseLibraryEntry(selectedExercise).substitutions.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {getExerciseLibraryEntry(selectedExercise).substitutions.map((substitution) => (
+                      <span key={substitution} className="rounded-full border border-fitblue/25 bg-fitblue/10 px-3 py-1 text-xs font-bold text-slate-200">{substitution}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm leading-6 text-slate-300">Sem substituições cadastradas.</p>
+                )}
+                <button className="btn-secondary mt-4 w-full sm:w-auto" onClick={() => setShowSubstitutionHelp(!showSubstitutionHelp)}>
+                  Não consigo fazer este exercício
+                </button>
+                {showSubstitutionHelp && (
+                  <div className="mt-4 rounded-xl border border-fitorange/30 bg-fitorange/10 p-3">
+                    <p className="text-xs font-black uppercase tracking-[0.12em] text-fitorange">Motivo</p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {['Não tenho esse equipamento', 'Senti dor', 'Não sei executar', 'Academia cheia', 'Muito difícil'].map((reason) => (
+                        <button
+                          key={reason}
+                          className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold ${substitutionReason === reason ? 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen' : 'border-line bg-ink/50 text-slate-200'}`}
+                          onClick={() => setSubstitutionReason(reason)}
+                        >
+                          {reason}
+                        </button>
+                      ))}
+                    </div>
+                    {substitutionReason && <p className="mt-3 rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">Solicitação registrada. Fale com seu personal para ajustar o treino.</p>}
+                    {whatsappUrl && <a className="btn-primary mt-4 w-full sm:w-auto" href={whatsappUrl} target="_blank" rel="noopener noreferrer">Pedir ajuste ao personal</a>}
+                  </div>
+                )}
+              </div>
+                </div>
+              )}
+
+              {exerciseDetailTab === 'notes' && (
+                <div className="space-y-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <Input label="Carga usada hoje" value={exerciseLogs[selectedExercise.id]?.load ?? ''} onChange={(value) => updateExerciseLog(selectedExercise.id, { load: value })} />
                 <Input label="Anotações do aluno" value={exerciseLogs[selectedExercise.id]?.notes ?? ''} onChange={(value) => updateExerciseLog(selectedExercise.id, { notes: value })} />
               </div>
-              {selectedExercise.videoUrl && <a className="btn-secondary w-full sm:w-auto" href={selectedExercise.videoUrl} target="_blank" rel="noopener noreferrer">Ver vídeo explicativo</a>}
+                  <button className="btn-primary w-full sm:w-auto" onClick={() => { setNoteSavedMessage('Anotação salva.'); window.setTimeout(() => setNoteSavedMessage(''), 2500); }}>Salvar anotação</button>
+                  {noteSavedMessage && <p className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">{noteSavedMessage}</p>}
+                </div>
+              )}
+
+              {getExerciseMediaUrl(selectedExercise) && <a className="btn-secondary mt-3 w-full sm:w-auto" href={getExerciseMediaUrl(selectedExercise)} target="_blank" rel="noopener noreferrer">Ver demonstração</a>}
             </div>
+
+              <div className="border-t border-fitblue/20 bg-slate-950/95 p-4 backdrop-blur">
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <button className={selectedExercise.status === 'concluido' ? 'btn-secondary w-full' : 'btn-primary w-full'} onClick={() => toggleExercise(selectedExercise)}>
+                    {selectedExercise.status === 'concluido' ? 'Desmarcar' : 'Concluir exercício'}
+                  </button>
+                  <button className="btn-secondary w-full" onClick={() => startRestTimer(selectedExercise)}>Iniciar descanso</button>
+                  <button className="btn-secondary w-full" onClick={() => setSelectedExercise(null)}>Fechar</button>
+                </div>
+              </div>
           </section>
         </div>
       )}
