@@ -1941,7 +1941,7 @@ function StudentArea({ user, data, commit }: { user: User; data: AppData; commit
       {tab === 'home' && <StudentDashboard data={data} student={student} onNavigate={selectTab} whatsappUrl={whatsappUrl} />}
       {tab === 'workout' && (
         <TrainingErrorBoundary key={`student-workout-${student.id}`} componentName="StudentWorkout">
-          <StudentWorkout data={data} student={student} commit={commit} />
+          <StudentGuidedWorkout data={data} student={student} commit={commit} whatsappUrl={whatsappUrl} />
         </TrainingErrorBoundary>
       )}
       {tab === 'journey' && <JourneyView data={data} student={student} canEditWater />}
@@ -6069,6 +6069,371 @@ function StudentDashboard({
           </div>
         </div>
       </Panel>
+    </Stack>
+  );
+}
+
+function getStudentExerciseLogKey(studentId: string) {
+  return `personalpro-student-exercise-log:${studentId}`;
+}
+
+function loadStudentExerciseLogs(studentId: string): Record<string, { load: string; notes: string }> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(getStudentExerciseLogKey(studentId));
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, { load: string; notes: string }> : {};
+  } catch (error) {
+    console.error('Erro ao carregar anotações do treino:', error);
+    return {};
+  }
+}
+
+function saveStudentExerciseLogs(studentId: string, logs: Record<string, { load: string; notes: string }>) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(getStudentExerciseLogKey(studentId), JSON.stringify(logs));
+}
+
+const restSoundStorageKey = 'personalpro-rest-sound-enabled';
+
+function loadRestSoundEnabled() {
+  if (typeof window === 'undefined') return true;
+  return window.localStorage.getItem(restSoundStorageKey) !== 'false';
+}
+
+function saveRestSoundEnabled(enabled: boolean) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(restSoundStorageKey, String(enabled));
+}
+
+function playRestBell() {
+  if (typeof window === 'undefined') return;
+  try {
+    const AudioCtor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtor) return;
+    const context = new AudioCtor();
+    const masterGain = context.createGain();
+    masterGain.gain.setValueAtTime(0.0001, context.currentTime);
+    masterGain.connect(context.destination);
+
+    [0, 0.18].forEach((offset) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, context.currentTime + offset);
+      oscillator.frequency.exponentialRampToValueAtTime(1320, context.currentTime + offset + 0.08);
+      gain.gain.setValueAtTime(0.0001, context.currentTime + offset);
+      gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + offset + 0.14);
+      oscillator.connect(gain);
+      gain.connect(masterGain);
+      oscillator.start(context.currentTime + offset);
+      oscillator.stop(context.currentTime + offset + 0.16);
+    });
+
+    window.setTimeout(() => {
+      context.close().catch(() => undefined);
+    }, 700);
+  } catch (error) {
+    console.warn('Não foi possível tocar o alerta de descanso:', error);
+  }
+}
+
+function vibrateRestFinished() {
+  try {
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      navigator.vibrate([200, 100, 200]);
+    }
+  } catch {
+    // Vibração é opcional e pode não existir no navegador.
+  }
+}
+
+function parseRestSeconds(value?: string) {
+  const text = String(value || '').toLowerCase();
+  const number = Number(text.match(/\d+/)?.[0] || 0);
+  if (!number) return 60;
+  return text.includes('min') ? number * 60 : number;
+}
+
+function formatTimer(seconds: number) {
+  const safe = Math.max(0, seconds);
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+}
+
+function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: AppData; student: Student; commit: (data: AppData, message?: string) => void; whatsappUrl?: string }) {
+  const allWorkouts = (Array.isArray(data.workouts) ? data.workouts : []).map(normalizeWorkout);
+  const workouts = allWorkouts.filter((item) => item.studentId === student.id);
+  const activeWorkout = workouts.find((item) => !item.completed) ?? workouts[0];
+  const exercises = safeWorkoutExercises(activeWorkout);
+  const completedCount = exercises.filter((exercise) => exercise.status === 'concluido').length;
+  const progress = exercises.length ? Math.round((completedCount / exercises.length) * 100) : 0;
+  const latestWorkoutLog = workoutLogsForStudent(data, student.id).find((log) => !activeWorkout || log.workoutId === activeWorkout.id);
+  const latestWorkoutDateTime = formatDateTimeParts(latestWorkoutLog?.completedAt);
+  const [selectedExercise, setSelectedExercise] = useState<Exercise | null>(null);
+  const [exerciseLogs, setExerciseLogs] = useState<Record<string, { load: string; notes: string }>>(() => loadStudentExerciseLogs(student.id));
+  const [timerExerciseId, setTimerExerciseId] = useState('');
+  const [timerSeconds, setTimerSeconds] = useState(0);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [restSoundEnabled, setRestSoundEnabled] = useState(loadRestSoundEnabled);
+
+  useEffect(() => {
+    if (!timerRunning || timerSeconds <= 0) return;
+    const id = window.setInterval(() => {
+      setTimerSeconds((current) => {
+        if (current <= 1) {
+          window.clearInterval(id);
+          setTimerRunning(false);
+          if (restSoundEnabled) playRestBell();
+          vibrateRestFinished();
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [timerRunning, timerSeconds]);
+
+  const updateWorkout = (workout: Workout, message = 'Treino atualizado.') => {
+    commit({ ...data, workouts: allWorkouts.map((item) => (item.id === workout.id ? normalizeWorkout(workout) : item)) }, message);
+  };
+
+  const toggleExercise = (exercise: Exercise) => {
+    if (!activeWorkout) return;
+    updateWorkout({
+      ...activeWorkout,
+      completed: false,
+      exercises: exercises.map((item) => (item.id === exercise.id ? { ...item, status: item.status === 'concluido' ? 'ativo' : 'concluido' } : item))
+    });
+  };
+
+  const updateExerciseLog = (exerciseId: string, patch: Partial<{ load: string; notes: string }>) => {
+    const next = {
+      ...exerciseLogs,
+      [exerciseId]: {
+        load: exerciseLogs[exerciseId]?.load ?? '',
+        notes: exerciseLogs[exerciseId]?.notes ?? '',
+        ...patch
+      }
+    };
+    setExerciseLogs(next);
+    saveStudentExerciseLogs(student.id, next);
+  };
+
+  const startRestTimer = (exercise: Exercise) => {
+    setTimerExerciseId(exercise.id);
+    setTimerSeconds(parseRestSeconds(exercise.rest));
+    setTimerRunning(true);
+  };
+
+  const resetRestTimer = (exercise: Exercise) => {
+    setTimerExerciseId(exercise.id);
+    setTimerSeconds(parseRestSeconds(exercise.rest));
+    setTimerRunning(false);
+  };
+
+  const toggleRestSound = () => {
+    const next = !restSoundEnabled;
+    setRestSoundEnabled(next);
+    saveRestSoundEnabled(next);
+  };
+
+  const completeWorkout = async () => {
+    if (!activeWorkout) return;
+    if (!completedCount && !window.confirm('Você ainda não marcou nenhum exercício. Deseja finalizar mesmo assim?')) return;
+    try {
+      const workoutLog = activeWorkout.completed ? null : await saveWorkoutLogRemote(activeWorkout.id, student.id, student.profileId);
+      commit({
+        ...data,
+        workouts: allWorkouts.map((item) => (item.id === activeWorkout.id ? normalizeWorkout({ ...activeWorkout, completed: true, exercises }) : item)),
+        workoutLogs: workoutLog ? [...data.workoutLogs, workoutLog] : data.workoutLogs
+      }, 'Treino finalizado com sucesso.');
+      window.alert('Treino finalizado com sucesso.');
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Não foi possível finalizar o treino.');
+    }
+  };
+
+  if (!workouts.length) {
+    return (
+      <Stack>
+        <PageTitle title="🏋️ Treino Guiado" subtitle="Siga seu treino, registre sua evolução e finalize sua sessão." />
+        <section className="rounded-2xl border border-fitblue/25 bg-panel/80 p-5 shadow-[0_20px_50px_rgba(0,0,0,.34)]">
+          <div className="rounded-2xl border border-fitblue/25 bg-fitblue/10 p-5">
+            <p className="text-2xl font-black text-white">Seu treino ainda não foi liberado.</p>
+            <p className="mt-3 text-base leading-7 text-slate-300">Assim que seu personal cadastrar seu treino, ele aparecerá aqui.</p>
+            {whatsappUrl && (
+              <a className="btn-primary mt-5 w-full sm:w-auto" href={whatsappUrl} target="_blank" rel="noopener noreferrer">
+                Chamar personal no WhatsApp
+              </a>
+            )}
+          </div>
+        </section>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack>
+      <PageTitle title="🏋️ Treino Guiado" subtitle="Siga seu treino, registre sua evolução e finalize sua sessão." />
+
+      <Panel title="Treino de hoje" action={<Badge label={activeWorkout?.completed ? 'Finalizado' : completedCount ? 'Em andamento' : 'Pronto para iniciar'} />}>
+        <div className="grid gap-5 lg:grid-cols-[1.35fr_0.65fr] lg:items-center">
+          <div>
+            <p className="text-3xl font-black leading-tight text-white">{activeWorkout?.name || 'Treino sem nome'}</p>
+            <p className="mt-2 text-base leading-7 text-slate-300">{activeWorkout?.objective || 'Objetivo não informado'}</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <InfoBox label="Duração estimada" value={activeWorkout?.estimatedDuration || 'Não informada'} />
+              <InfoBox label="Exercícios" value={exercises.length} />
+              <InfoBox label="Status" value={activeWorkout?.completed ? 'Finalizado' : completedCount ? 'Em andamento' : 'Não iniciado'} />
+              <InfoBox label="Última realização" value={latestWorkoutLog ? latestWorkoutDateTime.date : 'Sem registros'} />
+            </div>
+          </div>
+          <div className="rounded-2xl border border-fitblue/25 bg-fitblue/10 p-4">
+            <div className="flex items-end justify-between gap-3">
+              <p className="text-5xl font-black text-white">{progress}%</p>
+              <p className="text-sm font-semibold text-slate-300">{completedCount}/{exercises.length} concluídos</p>
+            </div>
+            <div className="mt-4 h-4 overflow-hidden rounded-full border border-fitblue/20 bg-slate-800">
+              <div className="h-full rounded-full bg-gradient-to-r from-fitblue via-cyan-300 to-fitgreen transition-all" style={{ width: `${progress}%` }} />
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="space-y-4">
+        {exercises.length ? exercises.map((exercise, index) => {
+          const done = exercise.status === 'concluido';
+          const log = exerciseLogs[exercise.id] ?? { load: '', notes: '' };
+          const timerActive = timerExerciseId === exercise.id;
+          return (
+            <section key={exercise.id} className={`rounded-2xl border p-4 shadow-[0_18px_42px_rgba(0,0,0,.28)] transition ${done ? 'border-fitgreen/45 bg-fitgreen/10' : 'border-fitblue/20 bg-panel/80'}`}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`grid h-8 w-8 place-items-center rounded-full border text-sm font-black ${done ? 'border-fitgreen bg-fitgreen text-ink' : 'border-fitblue/40 bg-fitblue/10 text-fitblue'}`}>
+                      {done ? '✓' : index + 1}
+                    </span>
+                    <p className={`text-xl font-black text-white ${done ? 'opacity-70 line-through decoration-fitgreen/70' : ''}`}>{exercise.name || 'Exercício sem nome'}</p>
+                  </div>
+                  <p className="mt-2 text-sm font-semibold text-fitblue">{exercise.muscleGroup || 'Geral'}</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <InfoBox label="Séries" value={exercise.sets || 'Não informado'} />
+                    <InfoBox label="Repetições" value={exercise.reps || 'Não informado'} />
+                    <InfoBox label="Carga" value={exercise.load || 'A definir'} />
+                    <InfoBox label="Descanso" value={exercise.rest || 'A definir'} />
+                  </div>
+                  <p className="mt-4 rounded-xl border border-line bg-ink/40 p-3 text-sm leading-6 text-slate-300">
+                    {exercise.notes || 'Sem observações do personal.'}
+                  </p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <Input label="Carga usada hoje" value={log.load} onChange={(value) => updateExerciseLog(exercise.id, { load: value })} />
+                    <Input label="Anotação do aluno" value={log.notes} onChange={(value) => updateExerciseLog(exercise.id, { notes: value })} />
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3 lg:w-56 lg:grid-cols-1">
+                  <button className={done ? 'btn-secondary w-full' : 'btn-primary w-full'} onClick={() => toggleExercise(exercise)}>
+                    {done ? 'Desmarcar' : 'Concluir exercício'}
+                  </button>
+                  <button className="btn-secondary w-full" onClick={() => setSelectedExercise(exercise)}>Detalhes</button>
+                  <button className="btn-secondary w-full" onClick={() => startRestTimer(exercise)}>Iniciar descanso</button>
+                </div>
+              </div>
+              {timerActive && (
+                <div className={`mt-4 rounded-2xl border p-4 ${timerSeconds === 0 ? 'border-fitgreen/50 bg-fitgreen/10 shadow-[0_0_30px_rgba(53,230,140,0.18)]' : 'border-fitblue/30 bg-fitblue/10'}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.12em] text-fitblue">Timer de descanso</p>
+                      <p className="mt-1 text-3xl font-black text-white">{formatTimer(timerSeconds)}</p>
+                      {timerSeconds === 0 && (
+                        <div className="mt-2 space-y-2">
+                          <span className="inline-flex rounded-full border border-fitgreen/40 bg-fitgreen/15 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-fitgreen">
+                            Descanso finalizado
+                          </span>
+                          <p className="text-sm font-semibold text-fitgreen">Descanso finalizado. Próxima série!</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        className={`btn-secondary ${restSoundEnabled ? '!border-fitgreen/50 !bg-fitgreen/10 !text-fitgreen' : ''}`}
+                        onClick={toggleRestSound}
+                      >
+                        Som do descanso: {restSoundEnabled ? 'ligado' : 'desligado'}
+                      </button>
+                      {timerSeconds > 0 && <button className="btn-secondary" onClick={() => setTimerRunning(!timerRunning)}>{timerRunning ? 'Pausar' : 'Continuar'}</button>}
+                      <button className="btn-secondary" onClick={() => resetRestTimer(exercise)}>Reiniciar</button>
+                      {timerSeconds === 0 && <button className="btn-primary" onClick={() => startRestTimer(exercise)}>Iniciar novo descanso</button>}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          );
+        }) : (
+          <Panel title="Exercícios">
+            <p className="text-base text-slate-300">Este treino ainda não possui exercícios cadastrados.</p>
+          </Panel>
+        )}
+      </div>
+
+      <section className="sticky bottom-[5.3rem] z-20 rounded-2xl border border-fitgreen/35 bg-slate-950/92 p-3 shadow-[0_18px_46px_rgba(0,0,0,.42)] backdrop-blur md:static md:p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-black uppercase tracking-[0.12em] text-fitgreen">Sessão de treino</p>
+            <p className="mt-1 text-sm text-slate-300">{completedCount} de {exercises.length} exercícios concluídos.</p>
+          </div>
+          <button className="btn-primary w-full sm:w-auto" onClick={completeWorkout} disabled={Boolean(activeWorkout?.completed)}>
+            {activeWorkout?.completed ? 'Treino já finalizado' : 'Finalizar treino'}
+          </button>
+        </div>
+      </section>
+
+      {selectedExercise && (
+        <div className="fixed inset-0 z-50 grid place-items-end bg-black/70 p-3 backdrop-blur sm:place-items-center">
+          <section className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-2xl border border-fitblue/30 bg-slate-950 p-5 shadow-[0_24px_70px_rgba(0,0,0,.5)]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.12em] text-fitblue">Detalhes do exercício</p>
+                <h2 className="mt-2 text-2xl font-black text-white">{selectedExercise.name || 'Exercício sem nome'}</h2>
+                <p className="mt-1 text-sm font-semibold text-slate-400">{selectedExercise.muscleGroup || 'Geral'}</p>
+              </div>
+              <button className="icon-btn" onClick={() => setSelectedExercise(null)}><X size={18} /></button>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <InfoBox label="Séries" value={selectedExercise.sets || 'Não informado'} />
+              <InfoBox label="Repetições" value={selectedExercise.reps || 'Não informado'} />
+              <InfoBox label="Carga sugerida" value={selectedExercise.load || 'A definir'} />
+              <InfoBox label="Descanso" value={selectedExercise.rest || 'A definir'} />
+            </div>
+            <div className="mt-5 space-y-3">
+              <div className="rounded-xl border border-line bg-ink/40 p-4">
+                <p className="text-sm font-black text-white">Instruções</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">Execute o movimento com controle, mantendo postura firme e respeitando sua amplitude segura.</p>
+              </div>
+              <div className="rounded-xl border border-line bg-ink/40 p-4">
+                <p className="text-sm font-black text-white">Observações do personal</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">{selectedExercise.notes || 'Sem observações do personal.'}</p>
+              </div>
+              <div className="rounded-xl border border-line bg-ink/40 p-4">
+                <p className="text-sm font-black text-white">Músculos trabalhados</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">{selectedExercise.muscleGroup || 'Geral'}</p>
+              </div>
+              <div className="rounded-xl border border-line bg-ink/40 p-4">
+                <p className="text-sm font-black text-white">Erros comuns</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">Evitar compensar com a lombar, prender a respiração ou executar rápido demais.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Input label="Carga usada hoje" value={exerciseLogs[selectedExercise.id]?.load ?? ''} onChange={(value) => updateExerciseLog(selectedExercise.id, { load: value })} />
+                <Input label="Anotações do aluno" value={exerciseLogs[selectedExercise.id]?.notes ?? ''} onChange={(value) => updateExerciseLog(selectedExercise.id, { notes: value })} />
+              </div>
+              {selectedExercise.videoUrl && <a className="btn-secondary w-full sm:w-auto" href={selectedExercise.videoUrl} target="_blank" rel="noopener noreferrer">Ver vídeo explicativo</a>}
+            </div>
+          </section>
+        </div>
+      )}
     </Stack>
   );
 }
