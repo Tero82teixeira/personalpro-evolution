@@ -6610,8 +6610,12 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
                         </button>
                       ))}
                     </div>
-                    {substitutionReason && <p className="mt-3 rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">Solicitação registrada. Fale com seu personal para ajustar o treino.</p>}
-                    {whatsappUrl && <a className="btn-primary mt-4 w-full sm:w-auto" href={whatsappUrl} target="_blank" rel="noopener noreferrer">Pedir ajuste ao personal</a>}
+                    {substitutionReason && (
+                      <div className="mt-3 space-y-3">
+                        <p className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">Solicitacao registrada. Fale com seu personal para ajustar o treino.</p>
+                        {whatsappUrl && <a className="btn-primary w-full sm:w-auto" href={whatsappUrl} target="_blank" rel="noopener noreferrer">Pedir ajuste no WhatsApp</a>}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -6621,8 +6625,8 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
               {exerciseDetailTab === 'notes' && (
                 <div className="space-y-3">
               <div className="grid gap-3 sm:grid-cols-2">
-                <Input label="Carga usada hoje" value={exerciseLogs[selectedExercise.id]?.load ?? ''} onChange={(value) => updateExerciseLog(selectedExercise.id, { load: value })} />
-                <Input label="Anotações do aluno" value={exerciseLogs[selectedExercise.id]?.notes ?? ''} onChange={(value) => updateExerciseLog(selectedExercise.id, { notes: value })} />
+                <Input label="Carga usada hoje" value={exerciseLogs[selectedExercise.id]?.load ?? ''} onChange={(value) => updateExerciseLog(selectedExercise.id, { load: value })} placeholder="Ex: 20kg" />
+                <Textarea label="Anotacao do aluno" value={exerciseLogs[selectedExercise.id]?.notes ?? ''} onChange={(value) => updateExerciseLog(selectedExercise.id, { notes: value })} placeholder="Ex: senti dificuldade na ultima serie" />
               </div>
                   <button className="btn-primary w-full sm:w-auto" onClick={() => { setNoteSavedMessage('Anotação salva.'); window.setTimeout(() => setNoteSavedMessage(''), 2500); }}>Salvar anotação</button>
                   {noteSavedMessage && <p className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">{noteSavedMessage}</p>}
@@ -6634,10 +6638,10 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
 
               <div className="border-t border-fitblue/20 bg-slate-950/95 p-4 backdrop-blur">
                 <div className="grid gap-2 sm:grid-cols-3">
-                  <button className={selectedExercise.status === 'concluido' ? 'btn-secondary w-full' : 'btn-primary w-full'} onClick={() => toggleExercise(selectedExercise)}>
-                    {selectedExercise.status === 'concluido' ? 'Desmarcar' : 'Concluir exercício'}
+                  <button className={selectedExerciseCurrent?.status === 'concluido' ? 'btn-secondary w-full' : 'btn-primary w-full'} onClick={() => toggleExercise(selectedExerciseCurrent ?? selectedExercise)}>
+                    {selectedExerciseCurrent?.status === 'concluido' ? 'Desmarcar' : 'Concluir exercicio'}
                   </button>
-                  <button className="btn-secondary w-full" onClick={() => startRestTimer(selectedExercise)}>Iniciar descanso</button>
+                  <button className="btn-secondary w-full" onClick={() => startRestTimer(selectedExerciseCurrent ?? selectedExercise)}>Iniciar descanso</button>
                   <button className="btn-secondary w-full" onClick={() => setSelectedExercise(null)}>Fechar</button>
                 </div>
               </div>
@@ -6978,11 +6982,11 @@ function MobileTab({ active, icon: Icon, label, onClick }: { active: boolean; ic
   );
 }
 
-function Input({ label, value, onChange, type = 'text', required = false, disabled = false, readOnly = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean; disabled?: boolean; readOnly?: boolean }) {
+function Input({ label, value, onChange, type = 'text', required = false, disabled = false, readOnly = false, placeholder = '' }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean; disabled?: boolean; readOnly?: boolean; placeholder?: string }) {
   return (
     <label className="block text-sm">
       <span className="mb-1 block text-slate-300">{label}</span>
-      <input className={`field ${disabled || readOnly ? 'cursor-default bg-ink/70 text-slate-300 opacity-90' : ''}`} type={type} value={value ?? ''} required={required} disabled={disabled} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
+      <input className={`field ${disabled || readOnly ? 'cursor-default bg-ink/70 text-slate-300 opacity-90' : ''}`} type={type} value={value ?? ''} required={required} disabled={disabled} readOnly={readOnly} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }
@@ -6998,11 +7002,11 @@ function Select({ label, value, onChange, options, disabled = false }: { label: 
   );
 }
 
-function Textarea({ label, value, onChange, disabled = false, readOnly = false }: { label: string; value: string; onChange: (value: string) => void; disabled?: boolean; readOnly?: boolean }) {
+function Textarea({ label, value, onChange, disabled = false, readOnly = false, placeholder = '' }: { label: string; value: string; onChange: (value: string) => void; disabled?: boolean; readOnly?: boolean; placeholder?: string }) {
   return (
     <label className="block text-sm md:col-span-2">
       <span className="mb-1 block text-slate-300">{label}</span>
-      <textarea className={`field min-h-24 resize-y ${disabled || readOnly ? 'cursor-default bg-ink/70 text-slate-300 opacity-90' : ''}`} value={value ?? ''} disabled={disabled} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
+      <textarea className={`field min-h-24 resize-y ${disabled || readOnly ? 'cursor-default bg-ink/70 text-slate-300 opacity-90' : ''}`} value={value ?? ''} disabled={disabled} readOnly={readOnly} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }
