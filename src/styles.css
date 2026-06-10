@@ -42,6 +42,29 @@
     font: inherit;
   }
 
+  h1,
+  h2,
+  h3,
+  label,
+  button,
+  a {
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  p,
+  span {
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  img,
+  video,
+  canvas,
+  svg {
+    max-width: 100%;
+  }
+
   ::selection {
     background: rgba(58, 183, 255, 0.32);
     color: #fff;
@@ -51,6 +74,10 @@
 @layer components {
   .field {
     @apply w-full rounded-md border border-line bg-ink px-3 py-2.5 text-white outline-none transition placeholder:text-slate-600 focus:border-fitblue focus:ring-2 focus:ring-fitblue/20;
+    min-width: 0;
+    overflow-wrap: normal;
+    word-break: normal;
+    font-size: clamp(0.95rem, 0.92rem + 0.15vw, 1rem);
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
       rgba(6, 16, 29, 0.82);
@@ -75,6 +102,12 @@
 
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 rounded-md bg-fitgreen px-4 py-2.5 text-sm font-bold text-ink transition hover:brightness-110 active:scale-[0.99];
+    max-width: 100%;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
+    line-height: 1.2;
     border-radius: 0.9rem;
     background: linear-gradient(135deg, #0284c7 0%, #06b6d4 56%, #35e68c 100%);
     border: 1px solid rgba(186, 230, 253, 0.4);
@@ -85,6 +118,12 @@
 
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white/5 px-4 py-2.5 text-sm font-bold text-white transition hover:border-fitblue;
+    max-width: 100%;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
+    line-height: 1.2;
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.026)),
       rgba(15, 23, 42, 0.78);
@@ -95,6 +134,12 @@
 
   .btn-danger {
     @apply inline-flex items-center justify-center gap-2 rounded-md border border-fitorange/40 bg-fitorange/10 px-4 py-2.5 text-sm font-bold text-fitorange transition hover:bg-fitorange hover:text-ink;
+    max-width: 100%;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
+    line-height: 1.2;
     background: linear-gradient(135deg, rgba(127, 29, 29, 0.24), rgba(69, 10, 10, 0.44));
     border-color: rgba(248, 113, 113, 0.38);
     border-radius: 0.9rem;
@@ -187,6 +232,12 @@
 
   .chip {
     @apply rounded-full border border-line bg-ink/50 px-3 py-1.5 text-sm text-slate-300 transition hover:border-fitblue;
+    display: inline-flex;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
+    line-height: 1.15;
     background: rgba(15, 23, 42, 0.62);
     border-color: rgba(125, 211, 252, 0.16);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -194,6 +245,12 @@
 
   .chip-active {
     @apply rounded-full border border-fitgreen bg-fitgreen px-3 py-1.5 text-sm font-bold text-ink;
+    display: inline-flex;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: normal;
+    line-height: 1.15;
     background: linear-gradient(135deg, rgba(58, 183, 255, 0.96), rgba(53, 230, 140, 0.96));
     border-color: rgba(187, 247, 208, 0.56);
     box-shadow: 0 0 22px rgba(53, 230, 140, 0.18);
@@ -337,7 +394,9 @@
   }
 
   main [class*="uppercase"] {
-    letter-spacing: 0.11em;
+    letter-spacing: 0.08em;
+    word-break: normal;
+    overflow-wrap: normal;
   }
 
   main [class*="text-fitblue"],

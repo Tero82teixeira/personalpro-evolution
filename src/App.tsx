@@ -41,6 +41,62 @@ import type { Anamnesis, AppData, CheckIn, Exercise, MarketingIdea, MessageTempl
 
 type IconProps = { size?: number; className?: string };
 type IconComponent = (props: IconProps) => React.JSX.Element;
+type ExerciseChangeRequestStatus = 'Pendente' | 'Aprovada' | 'Recusada' | 'Respondida';
+type ExerciseChangeRequest = {
+  id: string;
+  studentId: string;
+  personalId?: string;
+  workoutId: string;
+  workoutName: string;
+  exerciseId: string;
+  exerciseName: string;
+  currentExerciseData: Exercise;
+  reason: string;
+  message: string;
+  status: ExerciseChangeRequestStatus;
+  suggestedReplacement: string;
+  personalResponse: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const exerciseChangeRequestsKey = 'personalpro-exercise-change-requests';
+
+function loadExerciseChangeRequests(): ExerciseChangeRequest[] {
+  try {
+    const raw = localStorage.getItem(exerciseChangeRequestsKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveExerciseChangeRequests(requests: ExerciseChangeRequest[]) {
+  localStorage.setItem(exerciseChangeRequestsKey, JSON.stringify(requests));
+}
+
+function upsertExerciseChangeRequest(request: ExerciseChangeRequest) {
+  const requests = loadExerciseChangeRequests();
+  const next = [request, ...requests.filter((item) => item.id !== request.id)];
+  saveExerciseChangeRequests(next);
+  return next;
+}
+
+function updateExerciseChangeRequest(requestId: string, patch: Partial<ExerciseChangeRequest>) {
+  const now = new Date().toISOString();
+  const next = loadExerciseChangeRequests().map((request) => (
+    request.id === requestId ? { ...request, ...patch, updatedAt: now } : request
+  ));
+  saveExerciseChangeRequests(next);
+  return next;
+}
+
+function latestExerciseChangeRequest(requests: ExerciseChangeRequest[], studentId: string, exerciseId: string) {
+  return requests
+    .filter((request) => request.studentId === studentId && request.exerciseId === exerciseId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+}
 
 class TrainingErrorBoundary extends Component<{ componentName: string; children: ReactNode }, { error?: Error; stack?: string }> {
   state: { error?: Error; stack?: string } = {};
@@ -2522,7 +2578,7 @@ function StudentSmartReportPanel({
       <div className="space-y-4 rounded-xl border border-fitblue/35 bg-[linear-gradient(135deg,rgba(56,189,248,.1),rgba(13,23,38,.96))] p-4 shadow-[0_18px_44px_rgba(14,165,233,0.12)]">
         <div>
           <p className="text-sm font-semibold text-slate-300">Resumo profissional da evolução, consistência e pontos de atenção.</p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <InfoBox label="Aluno" value={studentDisplayName(report.student)} />
             <InfoBox label="Data do relatório" value={report.reportDate} />
             <InfoBox label="Status geral" value={report.student.status} />
@@ -3485,9 +3541,20 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
   });
   const [workout, setWorkout] = useState<Workout>(() => createWorkoutForm(student.id));
   const [isEditing, setIsEditing] = useState(true);
+  const [changeRequests, setChangeRequests] = useState<ExerciseChangeRequest[]>(() => loadExerciseChangeRequests());
+  const [requestDrafts, setRequestDrafts] = useState<Record<string, { replacement: string; response: string }>>({});
+  const studentChangeRequests = changeRequests
+    .filter((request) => request.studentId === student.id)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const pendingChangeRequests = studentChangeRequests.filter((request) => request.status === 'Pendente').length;
+  const studentWhatsapp = String(student.phone || '').replace(/\D/g, '');
+  const buildStudentExerciseWhatsApp = (request: ExerciseChangeRequest) => studentWhatsapp
+    ? `https://wa.me/${studentWhatsapp}?text=${encodeURIComponent(`Ola, tenho uma duvida sobre o exercicio ${request.exerciseName} do treino ${request.workoutName}.`)}`
+    : '';
   useEffect(() => {
     setWorkout(createWorkoutForm(student.id));
     setIsEditing(true);
+    setChangeRequests(loadExerciseChangeRequests());
   }, [student.id]);
   const save = async () => {
     if (!workout.name) return;
@@ -3531,9 +3598,91 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
     }
   };
 
+  const updateRequestDraft = (requestId: string, patch: Partial<{ replacement: string; response: string }>) => {
+    setRequestDrafts((current) => ({
+      ...current,
+      [requestId]: {
+        replacement: current[requestId]?.replacement ?? '',
+        response: current[requestId]?.response ?? '',
+        ...patch
+      }
+    }));
+  };
+  const answerChangeRequest = (request: ExerciseChangeRequest, status: ExerciseChangeRequestStatus) => {
+    const draft = requestDrafts[request.id] ?? { replacement: request.suggestedReplacement, response: request.personalResponse };
+    if (status === 'Aprovada' && !draft.replacement.trim()) {
+      window.alert('Informe o exercicio substituto.');
+      return;
+    }
+    const next = updateExerciseChangeRequest(request.id, {
+      status,
+      suggestedReplacement: status === 'Aprovada' ? draft.replacement.trim() : request.suggestedReplacement,
+      personalResponse: draft.response.trim() || (status === 'Aprovada' ? 'Solicitacao aprovada. Ajuste o exercicio conforme orientacao do personal.' : 'Mantenha o exercicio com atencao a tecnica ou fale com seu personal.')
+    });
+    setChangeRequests(next);
+    setRequestDrafts((current) => ({
+      ...current,
+      [request.id]: { replacement: '', response: '' }
+    }));
+    window.alert(status === 'Aprovada' ? 'Solicitacao aprovada. O aluno vera a orientacao no treino.' : 'Resposta enviada ao aluno.');
+  };
+
   return (
     <Stack>
       <PageTitle title="Criação de treinos" subtitle={`Treinos personalizados para ${studentDisplayName(student)}.`} />
+      <Panel title="Solicitacoes de troca de exercicio" action={<Badge label={`Pendentes: ${pendingChangeRequests}`} />}>
+        {studentChangeRequests.length ? (
+          <div className="space-y-3">
+            {studentChangeRequests.map((request) => {
+              const draft = requestDrafts[request.id] ?? { replacement: request.suggestedReplacement, response: request.personalResponse };
+              const whatsapp = buildStudentExerciseWhatsApp(request);
+              return (
+                <div key={request.id} className="rounded-2xl border border-fitblue/20 bg-ink/45 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.12em] text-fitblue">{request.status}</p>
+                      <p className="mt-1 text-lg font-black text-white">{request.exerciseName}</p>
+                      <p className="mt-1 text-sm text-slate-300">Aluno: {studentDisplayName(student)} | Treino: {request.workoutName}</p>
+                      <p className="mt-2 text-sm text-slate-300">Motivo: {request.reason}</p>
+                      {request.message && <p className="mt-1 text-sm text-slate-400">Mensagem: {request.message}</p>}
+                      <p className="mt-1 text-xs text-slate-500">Data: {formatDateTimeParts(request.createdAt).date}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {whatsapp ? (
+                        <a className="btn-secondary w-full sm:w-auto" href={whatsapp} target="_blank" rel="noopener noreferrer">Chamar no WhatsApp</a>
+                      ) : (
+                        <span className="rounded-lg border border-line bg-ink/60 px-3 py-2 text-sm text-slate-400">Telefone do aluno nao cadastrado</span>
+                      )}
+                    </div>
+                  </div>
+                  {request.status === 'Pendente' ? (
+                    <>
+                      <div className="mt-4 grid gap-3 md:grid-cols-2">
+                        <Input label="Exercicio substituto" value={draft.replacement} onChange={(value) => updateRequestDraft(request.id, { replacement: value })} placeholder="Ex: Leg press" />
+                        <Input label="Mensagem ao aluno" value={draft.response} onChange={(value) => updateRequestDraft(request.id, { response: value })} placeholder="Ex: reduza a carga e mantenha a tecnica" />
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button className="btn-primary w-full sm:w-auto" onClick={() => answerChangeRequest(request, 'Aprovada')}>Aprovar troca</button>
+                        <button className="btn-secondary w-full sm:w-auto" onClick={() => answerChangeRequest(request, 'Recusada')}>Recusar</button>
+                        <button className="btn-secondary w-full sm:w-auto" onClick={() => answerChangeRequest(request, 'Respondida')}>Responder aluno</button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="mt-4 rounded-xl border border-fitgreen/25 bg-fitgreen/10 p-4">
+                      <p className="text-xs font-black uppercase tracking-[0.12em] text-fitgreen">Resposta registrada</p>
+                      {request.suggestedReplacement && <p className="mt-2 break-words text-sm text-slate-200">Exercicio substituto: <strong>{request.suggestedReplacement}</strong></p>}
+                      {request.personalResponse && <p className="mt-2 break-words text-sm text-slate-300">Orientacao: {request.personalResponse}</p>}
+                      <p className="mt-2 text-xs text-slate-500">Atualizado em {formatDateTimeParts(request.updatedAt).date}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="rounded-xl border border-line bg-ink/40 p-4 text-sm text-slate-300">Nenhuma solicitacao de troca de exercicio para este aluno.</p>
+        )}
+      </Panel>
       <Panel title={workout.id ? 'Treino selecionado' : 'Treino personalizado'}>
         {workout.id && <FormModeNotice editing={isEditing} />}
         <div className="grid gap-3 md:grid-cols-3">
@@ -3788,19 +3937,22 @@ function CheckinsView({
             const expanded = Boolean(expandedCheckIns[checkIn.id]);
             return (
               <Panel key={checkIn.id} title={`Check-in de ${checkInStudent ? studentDisplayName(checkInStudent) : studentName(data, checkIn.studentId)}`}>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <InfoBox label="Aluno" value={checkInStudent ? studentDisplayName(checkInStudent) : studentName(data, checkIn.studentId)} />
                   <InfoBox label="Data do check-in" value={formatDate(getCheckInDateValue(checkIn))} />
                   <InfoBox label="Peso atual" value={checkIn.currentWeight ? `${checkIn.currentWeight} kg` : 'Não informado'} />
                   <InfoBox label="Motivação" value={`${checkIn.motivation || 0}/10`} />
                   <InfoBox label="Status" value={<Badge label="Respondido" />} />
                 </div>
-                <button
-                  className="btn-secondary mt-4 w-full sm:w-auto"
-                  onClick={() => setExpandedCheckIns({ ...expandedCheckIns, [checkIn.id]: !expanded })}
-                >
-                  {expanded ? 'Ocultar check-in completo' : 'Ver check-in completo'}
-                </button>
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                  <button
+                    className="btn-secondary w-full sm:w-auto"
+                    onClick={() => setExpandedCheckIns({ ...expandedCheckIns, [checkIn.id]: !expanded })}
+                  >
+                    {expanded ? 'Ocultar check-in completo' : 'Ver check-in completo'}
+                  </button>
+                  <button className="btn-danger w-full sm:w-auto" onClick={() => deleteCheckIn(checkIn)}>Excluir check-in</button>
+                </div>
                 {expanded && (
                   <div className="mt-4 space-y-4">
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -3826,7 +3978,6 @@ function CheckinsView({
                     </div>
                   </div>
                 )}
-                <button className="btn-danger mt-4 w-full sm:w-auto" onClick={() => deleteCheckIn(checkIn)}>Excluir check-in</button>
               </Panel>
             );
           })}
@@ -5755,7 +5906,7 @@ function WorkoutLogHistory({
               const completed = formatDateTimeParts(log.completedAt);
               return (
                 <div key={log.id} className="rounded-md border border-line bg-ink/40 p-3">
-                  <div className={`grid gap-3 sm:grid-cols-2 ${showStudent ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
+                  <div className={`grid gap-3 sm:grid-cols-2 ${showStudent ? 'lg:grid-cols-3' : 'lg:grid-cols-4'}`}>
                     {showStudent && <InfoBox label="Aluno" value={studentName(data, log.studentId)} />}
                     <InfoBox label="Treino" value={workoutName(data, log.workoutId)} />
                     <InfoBox label="Data" value={completed.date} />
@@ -5939,7 +6090,7 @@ function StudentDashboard({
           <div className="flex min-h-[21rem] flex-col justify-between space-y-5">
             <div>
               <div className="flex items-end justify-between gap-3">
-                <p className="text-5xl font-black text-white">{weekProgress}%</p>
+                <p className="text-[clamp(2rem,7vw,3rem)] font-black leading-none text-white">{weekProgress}%</p>
                 <p className="text-sm font-semibold text-slate-400">Semana atual</p>
               </div>
               <div className="mt-4 h-4 overflow-hidden rounded-full border border-fitblue/20 bg-slate-800">
@@ -6305,9 +6456,14 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
   const [showSubstitutionHelp, setShowSubstitutionHelp] = useState(false);
   const [exerciseDetailTab, setExerciseDetailTab] = useState<'execution' | 'muscles' | 'substitutions' | 'notes'>('execution');
   const [substitutionReason, setSubstitutionReason] = useState('');
+  const [substitutionMessage, setSubstitutionMessage] = useState('');
+  const [substitutionSentMessage, setSubstitutionSentMessage] = useState('');
+  const [changeRequests, setChangeRequests] = useState<ExerciseChangeRequest[]>(() => loadExerciseChangeRequests());
   const [noteSavedMessage, setNoteSavedMessage] = useState('');
   const [failedExerciseMedia, setFailedExerciseMedia] = useState('');
   const selectedExerciseCurrent = selectedExercise ? exercises.find((exercise) => exercise.id === selectedExercise.id) ?? selectedExercise : null;
+  const selectedExerciseRequest = selectedExercise ? latestExerciseChangeRequest(changeRequests, student.id, selectedExercise.id) : undefined;
+  const answeredExerciseRequests = changeRequests.filter((request) => request.studentId === student.id && request.status !== 'Pendente');
 
   useEffect(() => {
     if (!timerRunning || timerSeconds <= 0) return;
@@ -6363,6 +6519,33 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
     setTimerSeconds(parseRestSeconds(exercise.rest));
     setTimerRunning(false);
   };
+  const sendExerciseChangeRequest = (exercise: Exercise) => {
+    if (!substitutionReason) {
+      window.alert('Selecione um motivo para enviar a solicitacao.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const request: ExerciseChangeRequest = {
+      id: makeId('ecr'),
+      studentId: student.id,
+      personalId: student.profileId,
+      workoutId: activeWorkout?.id ?? '',
+      workoutName: activeWorkout?.name || 'Treino',
+      exerciseId: exercise.id,
+      exerciseName: exercise.name || 'Exercicio',
+      currentExerciseData: exercise,
+      reason: substitutionReason,
+      message: substitutionMessage,
+      status: 'Pendente',
+      suggestedReplacement: '',
+      personalResponse: '',
+      createdAt: now,
+      updatedAt: now
+    };
+    const next = upsertExerciseChangeRequest(request);
+    setChangeRequests(next);
+    setSubstitutionSentMessage('Solicitacao enviada ao seu personal. Ele podera ajustar seu treino.');
+  };
 
   const toggleRestSound = () => {
     const next = !restSoundEnabled;
@@ -6409,6 +6592,12 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
     <Stack>
       <PageTitle title="🏋️ Treino Guiado" subtitle="Siga seu treino, registre sua evolução e finalize sua sessão." />
 
+      {answeredExerciseRequests.length > 0 && (
+        <section className="rounded-2xl border border-fitgreen/35 bg-fitgreen/10 p-4 text-sm font-semibold text-fitgreen">
+          Seu personal respondeu uma solicitacao de exercicio.
+        </section>
+      )}
+
       <Panel title="Treino de hoje" action={<Badge label={activeWorkout?.completed ? 'Finalizado' : completedCount ? 'Em andamento' : 'Pronto para iniciar'} />}>
         <div className="grid gap-5 lg:grid-cols-[1.35fr_0.65fr] lg:items-center">
           <div>
@@ -6423,7 +6612,7 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
           </div>
           <div className="rounded-2xl border border-fitblue/25 bg-fitblue/10 p-4">
             <div className="flex items-end justify-between gap-3">
-              <p className="text-5xl font-black text-white">{progress}%</p>
+              <p className="text-[clamp(2rem,7vw,3rem)] font-black leading-none text-white">{progress}%</p>
               <p className="text-sm font-semibold text-slate-300">{completedCount}/{exercises.length} concluídos</p>
             </div>
             <div className="mt-4 h-4 overflow-hidden rounded-full border border-fitblue/20 bg-slate-800">
@@ -6467,7 +6656,7 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
                   <button className={done ? 'btn-secondary w-full' : 'btn-primary w-full'} onClick={() => toggleExercise(exercise)}>
                     {done ? 'Desmarcar' : 'Concluir exercício'}
                   </button>
-                  <button className="btn-secondary w-full" onClick={() => { setSelectedExercise(exercise); setShowSubstitutionHelp(false); setExerciseDetailTab('execution'); setSubstitutionReason(''); setNoteSavedMessage(''); }}>Detalhes</button>
+                  <button className="btn-secondary w-full" onClick={() => { setSelectedExercise(exercise); setShowSubstitutionHelp(false); setExerciseDetailTab('execution'); setSubstitutionReason(''); setSubstitutionMessage(''); setSubstitutionSentMessage(''); setNoteSavedMessage(''); setChangeRequests(loadExerciseChangeRequests()); }}>Detalhes</button>
                   <button className="btn-secondary w-full" onClick={() => startRestTimer(exercise)}>Iniciar descanso</button>
                 </div>
               </div>
@@ -6632,6 +6821,19 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
                 <p className="text-sm font-black text-white">Observações do personal</p>
                 <p className="mt-2 text-sm leading-6 text-slate-300">{selectedExercise.notes || 'Sem observações do personal.'}</p>
               </div>
+              {selectedExerciseRequest && selectedExerciseRequest.status !== 'Pendente' && (
+                <div className={`rounded-xl border p-4 ${selectedExerciseRequest.status === 'Aprovada' ? 'border-fitgreen/35 bg-fitgreen/10' : 'border-fitorange/35 bg-fitorange/10'}`}>
+                  <p className="text-sm font-black text-white">{selectedExerciseRequest.status === 'Aprovada' ? 'Troca aprovada' : 'Troca respondida'}</p>
+                  <div className="mt-3 grid gap-2 text-sm text-slate-300 sm:grid-cols-2">
+                    <p className="break-words"><span className="font-black text-white">Original:</span> {selectedExerciseRequest.exerciseName}</p>
+                    <p className="break-words"><span className="font-black text-white">Status:</span> {selectedExerciseRequest.status}</p>
+                    {selectedExerciseRequest.suggestedReplacement && <p className="break-words"><span className="font-black text-white">Substituto:</span> {selectedExerciseRequest.suggestedReplacement}</p>}
+                    <p className="break-words"><span className="font-black text-white">Motivo:</span> {selectedExerciseRequest.reason}</p>
+                    {selectedExerciseRequest.personalResponse && <p className="break-words sm:col-span-2"><span className="font-black text-white">Orientacao:</span> {selectedExerciseRequest.personalResponse}</p>}
+                    <p className="text-xs text-slate-500 sm:col-span-2">Data: {formatDateTimeParts(selectedExerciseRequest.updatedAt).date}</p>
+                  </div>
+                </div>
+              )}
                 </div>
               )}
 
@@ -6673,43 +6875,61 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
 
               {exerciseDetailTab === 'substitutions' && (
                 <div className="space-y-3">
-              <div className="rounded-xl border border-line bg-ink/40 p-4">
-                <p className="text-sm font-black text-white">Substituições possíveis</p>
-                {getExerciseLibraryEntry(selectedExercise).substitutions.length ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {getExerciseLibraryEntry(selectedExercise).substitutions.map((substitution) => (
-                      <span key={substitution} className="rounded-full border border-fitblue/25 bg-fitblue/10 px-3 py-1 text-xs font-bold text-slate-200">{substitution}</span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-2 text-sm leading-6 text-slate-300">Sem substituições cadastradas.</p>
-                )}
-                <button className="btn-secondary mt-4 w-full sm:w-auto" onClick={() => setShowSubstitutionHelp(!showSubstitutionHelp)}>
-                  Não consigo fazer este exercício
-                </button>
-                {showSubstitutionHelp && (
-                  <div className="mt-4 rounded-xl border border-fitorange/30 bg-fitorange/10 p-3">
-                    <p className="text-xs font-black uppercase tracking-[0.12em] text-fitorange">Motivo</p>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      {['Não tenho esse equipamento', 'Senti dor', 'Não sei executar', 'Academia cheia', 'Muito difícil'].map((reason) => (
-                        <button
-                          key={reason}
-                          className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold ${substitutionReason === reason ? 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen' : 'border-line bg-ink/50 text-slate-200'}`}
-                          onClick={() => setSubstitutionReason(reason)}
-                        >
-                          {reason}
-                        </button>
-                      ))}
-                    </div>
-                    {substitutionReason && (
-                      <div className="mt-3 space-y-3">
-                        <p className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">Solicitacao registrada. Fale com seu personal para ajustar o treino.</p>
-                        {whatsappUrl && <a className="btn-primary w-full sm:w-auto" href={whatsappUrl} target="_blank" rel="noopener noreferrer">Pedir ajuste no WhatsApp</a>}
+                  <div className="rounded-xl border border-line bg-ink/40 p-4">
+                    <p className="text-sm font-black text-white">Substituicoes possiveis</p>
+                    {getExerciseLibraryEntry(selectedExercise).substitutions.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {getExerciseLibraryEntry(selectedExercise).substitutions.map((substitution) => (
+                          <span key={substitution} className="rounded-full border border-fitblue/25 bg-fitblue/10 px-3 py-1 text-xs font-bold text-slate-200">{substitution}</span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-sm leading-6 text-slate-300">Sem substituicoes cadastradas.</p>
+                    )}
+                    {selectedExerciseRequest && (
+                      <div className={`mt-4 rounded-xl border p-4 ${selectedExerciseRequest.status === 'Aprovada' ? 'border-fitgreen/35 bg-fitgreen/10' : selectedExerciseRequest.status === 'Recusada' ? 'border-fitorange/35 bg-fitorange/10' : 'border-fitblue/30 bg-fitblue/10'}`}>
+                        <p className="text-xs font-black uppercase tracking-[0.12em] text-fitblue">{selectedExerciseRequest.status === 'Aprovada' ? 'Troca aprovada' : selectedExerciseRequest.status === 'Recusada' ? 'Troca recusada' : 'Solicitacao enviada'}</p>
+                        <div className="mt-3 grid gap-2 text-sm text-slate-300 sm:grid-cols-2">
+                          <p className="break-words"><span className="font-black text-white">Exercicio original:</span> {selectedExerciseRequest.exerciseName}</p>
+                          <p className="break-words"><span className="font-black text-white">Status:</span> {selectedExerciseRequest.status}</p>
+                          {selectedExerciseRequest.suggestedReplacement && <p className="break-words"><span className="font-black text-white">Exercicio substituto:</span> {selectedExerciseRequest.suggestedReplacement}</p>}
+                          <p className="break-words"><span className="font-black text-white">Motivo:</span> {selectedExerciseRequest.reason}</p>
+                          {selectedExerciseRequest.personalResponse && <p className="break-words sm:col-span-2"><span className="font-black text-white">Resposta/orientacao do personal:</span> {selectedExerciseRequest.personalResponse}</p>}
+                          <p className="text-xs text-slate-500 sm:col-span-2">Data da atualizacao: {formatDateTimeParts(selectedExerciseRequest.updatedAt).date}</p>
+                        </div>
+                        {selectedExerciseRequest.status === 'Pendente' && <p className="mt-3 text-sm font-semibold text-slate-300">Aguardando resposta do personal.</p>}
+                      </div>
+                    )}
+                    <button className="btn-secondary mt-4 w-full sm:w-auto" onClick={() => setShowSubstitutionHelp(!showSubstitutionHelp)}>
+                      Nao consigo fazer este exercicio
+                    </button>
+                    {showSubstitutionHelp && (
+                      <div className="mt-4 rounded-xl border border-fitorange/30 bg-fitorange/10 p-4">
+                        <p className="text-lg font-black text-white">Solicitar ajuste do exercicio</p>
+                        <p className="mt-2 text-sm text-slate-300">Exercicio atual: {selectedExercise.name || 'Exercicio'}</p>
+                        <p className="mt-4 text-xs font-black uppercase tracking-[0.12em] text-fitorange">Motivo da solicitacao</p>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          {['Nao tenho esse equipamento', 'Senti dor', 'Nao sei executar', 'Academia cheia', 'Muito dificil', 'Outro motivo'].map((reason) => (
+                            <button
+                              key={reason}
+                              className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold ${substitutionReason === reason ? 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen' : 'border-line bg-ink/50 text-slate-200'}`}
+                              onClick={() => setSubstitutionReason(reason)}
+                            >
+                              {reason}
+                            </button>
+                          ))}
+                        </div>
+                        <Textarea label="Descreva melhor o que aconteceu" value={substitutionMessage} onChange={setSubstitutionMessage} placeholder="Ex: senti desconforto no ombro na segunda serie" />
+                        <button className="btn-primary mt-3 w-full sm:w-auto" onClick={() => sendExerciseChangeRequest(selectedExerciseCurrent ?? selectedExercise)}>Enviar solicitacao ao Personal</button>
+                        {substitutionSentMessage && (
+                          <div className="mt-3 space-y-3">
+                            <p className="rounded-lg border border-fitgreen/30 bg-fitgreen/10 p-3 text-sm font-semibold text-fitgreen">{substitutionSentMessage}</p>
+                            {whatsappUrl && <a className="btn-primary w-full sm:w-auto" href={whatsappUrl} target="_blank" rel="noopener noreferrer">Chamar personal no WhatsApp</a>}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-                )}
-              </div>
                 </div>
               )}
 
@@ -7047,19 +7267,23 @@ function Stack({ children }: { children: React.ReactNode }) {
 
 function PageTitle({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <div>
-      <h1 className="text-[23px] font-black leading-tight sm:text-3xl">{title}</h1>
-      <p className="mt-1 text-xs leading-relaxed text-slate-400 sm:text-sm">{subtitle}</p>
+    <div className="relative overflow-hidden rounded-2xl border border-fitblue/20 bg-[linear-gradient(135deg,rgba(15,23,42,.76),rgba(8,47,73,.28))] p-4 shadow-[0_18px_48px_rgba(0,0,0,.24)] sm:p-5">
+      <div className="absolute left-4 top-0 h-1 w-28 rounded-b-full bg-gradient-to-r from-fitblue via-cyan-300 to-fitgreen" />
+      <h1 className="max-w-full break-words text-2xl font-black leading-tight tracking-tight text-white sm:text-3xl">{title}</h1>
+      <p className="mt-2 max-w-3xl break-words text-sm leading-relaxed text-slate-400 sm:text-base">{subtitle}</p>
     </div>
   );
 }
 
 function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-fitblue/25 bg-panel/80 p-3 shadow-[0_20px_50px_rgba(0,0,0,.34)] sm:p-5">
+    <section className="max-w-full overflow-hidden rounded-2xl border border-fitblue/25 bg-panel/80 p-3 shadow-[0_20px_50px_rgba(0,0,0,.34)] sm:p-5">
       <div className="mb-3 flex flex-col gap-2 sm:mb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-        <h2 className="text-base font-black leading-tight text-white sm:text-lg">{title}</h2>
-        {action}
+        <div className="min-w-0">
+          <h2 className="break-words text-lg font-black leading-tight tracking-tight text-white sm:text-xl">{title}</h2>
+          <div className="mt-2 h-0.5 w-16 rounded-full bg-gradient-to-r from-fitblue to-fitgreen" />
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
       </div>
       {children}
     </section>
@@ -7076,7 +7300,7 @@ function StatCard({ label, value, icon: Icon, accent }: { label: string; value: 
           <Icon className={color} size={22} />
         </div>
       </div>
-      <p className="mt-3 truncate text-3xl font-black text-white sm:text-4xl">{value}</p>
+      <p className="mt-3 break-words text-[clamp(1.65rem,4vw,2.35rem)] font-black leading-tight text-white">{value}</p>
     </div>
   );
 }
@@ -7168,9 +7392,9 @@ function ImageUpload({ label, value, onChange, multiple = false, disabled = fals
 
 function InfoBox({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-fitblue/20 bg-ink/50 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.05)] sm:p-4">
-      <p className="text-[11px] font-black uppercase tracking-[0.12em] text-fitblue sm:text-xs sm:tracking-[0.14em]">{label}</p>
-      <p className="mt-1.5 break-words text-sm font-bold text-slate-100 sm:text-base">{value || '-'}</p>
+    <div className="min-w-0 rounded-xl border border-fitblue/20 bg-ink/50 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.05)] sm:p-4">
+      <p className="whitespace-normal text-xs font-black uppercase leading-snug tracking-[0.06em] text-fitblue sm:tracking-[0.08em]">{label}</p>
+      <div className="mt-1.5 min-w-0 break-words text-sm font-bold leading-snug text-slate-100 sm:text-base">{value || '-'}</div>
     </div>
   );
 }
@@ -7185,10 +7409,10 @@ function FormModeNotice({ editing }: { editing: boolean }) {
 
 function Row({ title, meta, badge }: { title: string; meta: string; badge: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-line bg-ink/40 p-3">
+    <div className="flex flex-col gap-3 rounded-md border border-line bg-ink/40 p-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
-        <p className="truncate font-semibold">{title}</p>
-        <p className="truncate text-sm text-slate-400">{meta}</p>
+        <p className="break-words font-semibold leading-snug">{title}</p>
+        <p className="mt-1 break-words text-sm leading-snug text-slate-400">{meta}</p>
       </div>
       <Badge label={badge} />
     </div>
@@ -7197,7 +7421,7 @@ function Row({ title, meta, badge }: { title: string; meta: string; badge: strin
 
 function Badge({ label }: { label: string }) {
   const display = label === 'concluido' ? 'Concluído' : label === 'ativo' ? 'Ativo' : label === 'pendente' ? 'Pendente' : label === 'atrasado' ? 'Atrasado' : label === 'pago' ? 'Pago' : label;
-  return <span className="rounded-full border border-fitblue/40 bg-fitblue/15 px-3 py-1.5 text-xs font-black text-fitblue shadow-[0_0_20px_rgba(58,183,255,.12)]">{display}</span>;
+  return <span className="inline-flex max-w-full shrink-0 items-center justify-center whitespace-normal break-words rounded-full border border-fitblue/40 bg-fitblue/15 px-3 py-1.5 text-center text-xs font-black leading-tight text-fitblue shadow-[0_0_20px_rgba(58,183,255,.12)]">{display}</span>;
 }
 
 function DashboardAlertList({
