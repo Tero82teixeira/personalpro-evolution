@@ -12,6 +12,20 @@ function numberOrZero(value: unknown) {
   return Number.isFinite(numberValue) ? numberValue : 0;
 }
 
+const exerciseMediaPrefix = 'personalpro-media:';
+
+function encodeExerciseMedia(exercise: Exercise) {
+  const hasMediaMeta = Boolean(exercise.imageUrl || exercise.gifUrl || exercise.externalVideoUrl || (exercise.mediaType && exercise.mediaType !== 'auto'));
+  if (!hasMediaMeta) return exercise.videoUrl;
+  return `${exerciseMediaPrefix}${JSON.stringify({
+    videoUrl: exercise.videoUrl || '',
+    imageUrl: exercise.imageUrl || '',
+    gifUrl: exercise.gifUrl || '',
+    externalVideoUrl: exercise.externalVideoUrl || '',
+    mediaType: exercise.mediaType || 'auto'
+  })}`;
+}
+
 function assessmentToRow(assessment: PhysicalAssessment) {
   return {
     ...(isUuid(assessment.id) ? { id: assessment.id } : {}),
@@ -145,7 +159,7 @@ function exerciseToRow(exercise: Exercise, workoutId: string, position: number) 
     load: exercise.load,
     rest: exercise.rest,
     technical_notes: exercise.notes,
-    video_url: exercise.videoUrl,
+    video_url: encodeExerciseMedia(exercise),
     status: exercise.status,
     position
   };

@@ -89,6 +89,10 @@ export interface Exercise {
   rest: string;
   notes: string;
   videoUrl: string;
+  imageUrl?: string;
+  gifUrl?: string;
+  externalVideoUrl?: string;
+  mediaType?: 'auto' | 'image' | 'video' | 'gif' | 'external' | 'none';
   status: 'ativo' | 'concluido';
 }
 

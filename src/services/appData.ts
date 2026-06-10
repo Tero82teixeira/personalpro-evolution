@@ -32,6 +32,38 @@ type DbProfile = {
 };
 
 const empty = '';
+const exerciseMediaPrefix = 'personalpro-media:';
+
+function decodeExerciseMedia(value: unknown) {
+  const raw = String(value ?? '');
+  if (!raw.startsWith(exerciseMediaPrefix)) {
+    return {
+      videoUrl: raw,
+      imageUrl: empty,
+      gifUrl: empty,
+      externalVideoUrl: empty,
+      mediaType: 'auto' as Exercise['mediaType']
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw.slice(exerciseMediaPrefix.length)) as Partial<Exercise>;
+    return {
+      videoUrl: String(parsed.videoUrl ?? ''),
+      imageUrl: String(parsed.imageUrl ?? ''),
+      gifUrl: String(parsed.gifUrl ?? ''),
+      externalVideoUrl: String(parsed.externalVideoUrl ?? ''),
+      mediaType: parsed.mediaType ?? 'auto'
+    };
+  } catch {
+    return {
+      videoUrl: empty,
+      imageUrl: empty,
+      gifUrl: empty,
+      externalVideoUrl: empty,
+      mediaType: 'auto' as Exercise['mediaType']
+    };
+  }
+}
 
 function isEmailLike(value?: string | null) {
   return Boolean(value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()));
@@ -128,18 +160,25 @@ export async function loadAppData(currentUser?: User | null): Promise<AppData> {
   ].find(Boolean);
   if (firstError) throw firstError;
 
-  const exercises = ((exercisesResult.data ?? []) as Record<string, any>[]).map<Exercise>((item) => ({
-    id: item.id,
-    name: item.name ?? empty,
-    muscleGroup: item.muscle_group ?? empty,
-    sets: item.sets ?? empty,
-    reps: item.reps ?? empty,
-    load: item.load ?? empty,
-    rest: item.rest ?? empty,
-    notes: item.technical_notes ?? empty,
-    videoUrl: item.video_url ?? empty,
-    status: item.status ?? 'ativo'
-  }));
+  const exercises = ((exercisesResult.data ?? []) as Record<string, any>[]).map<Exercise>((item) => {
+    const media = decodeExerciseMedia(item.video_url);
+    return {
+      id: item.id,
+      name: item.name ?? empty,
+      muscleGroup: item.muscle_group ?? empty,
+      sets: item.sets ?? empty,
+      reps: item.reps ?? empty,
+      load: item.load ?? empty,
+      rest: item.rest ?? empty,
+      notes: item.technical_notes ?? empty,
+      videoUrl: media.videoUrl,
+      imageUrl: media.imageUrl,
+      gifUrl: media.gifUrl,
+      externalVideoUrl: media.externalVideoUrl,
+      mediaType: media.mediaType,
+      status: item.status ?? 'ativo'
+    };
+  });
   const rawStudents = (studentsResult.data ?? []) as DbStudent[];
   const profiles = (profilesResult.data ?? []) as DbProfile[];
   const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));

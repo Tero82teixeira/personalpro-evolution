@@ -714,6 +714,9 @@ function expectedMonthlyWorkouts(data: AppData, studentId: string) {
 
 function normalizeExercise(rawExercise: unknown, index: number): Exercise {
   const source = (rawExercise && typeof rawExercise === 'object' ? rawExercise : {}) as Partial<Exercise>;
+  const mediaType = ['auto', 'image', 'video', 'gif', 'external', 'none'].includes(String(source.mediaType ?? ''))
+    ? source.mediaType
+    : 'auto';
   return {
     id: String(source.id ?? `exercise-${index}`),
     name: String(source.name ?? ''),
@@ -724,6 +727,10 @@ function normalizeExercise(rawExercise: unknown, index: number): Exercise {
     rest: String(source.rest ?? ''),
     notes: String(source.notes ?? ''),
     videoUrl: String(source.videoUrl ?? ''),
+    imageUrl: String(source.imageUrl ?? ''),
+    gifUrl: String(source.gifUrl ?? ''),
+    externalVideoUrl: String(source.externalVideoUrl ?? ''),
+    mediaType,
     status: source.status === 'concluido' ? 'concluido' : 'ativo'
   };
 }
@@ -3485,6 +3492,10 @@ function WorkoutCrud({ data, student, user, commit }: { data: AppData; student: 
   const save = async () => {
     if (!workout.name) return;
     const nextWorkout = normalizeWorkout({ ...workout, id: workout.id || makeId('w'), studentId: workout.studentId || student.id, exercises: safeWorkoutExercises(workout) });
+    if (safeWorkoutExercises(nextWorkout).some(hasInvalidExerciseMediaUrls)) {
+      window.alert('Informe uma URL valida comecando com http:// ou https://');
+      return;
+    }
     try {
       const remoteId = await saveWorkoutRemote(nextWorkout, user.id);
       const savedWorkout = normalizeWorkout({ ...nextWorkout, id: remoteId ?? nextWorkout.id });
@@ -6170,6 +6181,11 @@ type ExerciseLibraryEntry = {
   secondaryMuscles: string[];
   commonErrors: string[];
   substitutions: string[];
+  imageUrl?: string;
+  videoUrl?: string;
+  gifUrl?: string;
+  externalVideoUrl?: string;
+  mediaType?: Exercise['mediaType'];
   mediaUrl?: string;
 };
 
@@ -6221,9 +6237,46 @@ function getExerciseLibraryEntry(exercise: Exercise): ExerciseLibraryEntry {
   };
 }
 
+type ExerciseMedia = {
+  type: 'image' | 'video' | 'gif' | 'external' | 'none';
+  url: string;
+  externalUrl: string;
+};
+
+function isValidHttpUrl(value?: string) {
+  return /^https?:\/\//i.test(String(value || '').trim());
+}
+
+function getExerciseMedia(exercise: Exercise): ExerciseMedia {
+  const library = getExerciseLibraryEntry(exercise);
+  const mediaType = exercise.mediaType || library.mediaType || 'auto';
+  const videoUrl = String(exercise.videoUrl || library.videoUrl || library.mediaUrl || '').trim();
+  const gifUrl = String(exercise.gifUrl || library.gifUrl || '').trim();
+  const imageUrl = String(exercise.imageUrl || library.imageUrl || '').trim();
+  const externalVideoUrl = String(exercise.externalVideoUrl || library.externalVideoUrl || '').trim();
+  const mediaByType: Record<string, ExerciseMedia> = {
+    video: { type: 'video', url: videoUrl, externalUrl: externalVideoUrl || videoUrl },
+    gif: { type: 'gif', url: gifUrl, externalUrl: externalVideoUrl || gifUrl },
+    image: { type: 'image', url: imageUrl, externalUrl: externalVideoUrl || imageUrl },
+    external: { type: 'external', url: externalVideoUrl, externalUrl: externalVideoUrl },
+    none: { type: 'none', url: '', externalUrl: '' }
+  };
+  if (mediaType !== 'auto') return mediaByType[mediaType] ?? mediaByType.none;
+  if (videoUrl) return mediaByType.video;
+  if (gifUrl) return mediaByType.gif;
+  if (imageUrl) return mediaByType.image;
+  if (externalVideoUrl) return mediaByType.external;
+  return mediaByType.none;
+}
+
 function getExerciseMediaUrl(exercise: Exercise) {
-  const source = exercise as Exercise & { gifUrl?: string; imageUrl?: string; mediaUrl?: string };
-  return source.videoUrl || source.gifUrl || source.imageUrl || source.mediaUrl || '';
+  const media = getExerciseMedia(exercise);
+  return media.url || media.externalUrl || '';
+}
+
+function hasInvalidExerciseMediaUrls(exercise: Exercise) {
+  return [exercise.imageUrl, exercise.videoUrl, exercise.gifUrl, exercise.externalVideoUrl]
+    .some((value) => Boolean(String(value || '').trim()) && !isValidHttpUrl(value));
 }
 
 function isImageMedia(url: string) {
@@ -6253,6 +6306,7 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
   const [exerciseDetailTab, setExerciseDetailTab] = useState<'execution' | 'muscles' | 'substitutions' | 'notes'>('execution');
   const [substitutionReason, setSubstitutionReason] = useState('');
   const [noteSavedMessage, setNoteSavedMessage] = useState('');
+  const [failedExerciseMedia, setFailedExerciseMedia] = useState('');
   const selectedExerciseCurrent = selectedExercise ? exercises.find((exercise) => exercise.id === selectedExercise.id) ?? selectedExercise : null;
 
   useEffect(() => {
@@ -6507,21 +6561,58 @@ function StudentGuidedWorkout({ data, student, commit, whatsappUrl }: { data: Ap
                 <div className="space-y-3">
                   <div className="overflow-hidden rounded-2xl border border-fitblue/25 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.18),transparent_42%),rgba(15,23,42,0.72)]">
                     {(() => {
-                      const mediaUrl = getExerciseMediaUrl(selectedExercise);
-                      if (mediaUrl && isVideoMedia(mediaUrl)) {
-                        return <video className="aspect-video w-full bg-black object-cover" src={mediaUrl} controls playsInline />;
+                      const media = getExerciseMedia(selectedExercise);
+                      const mediaFailed = Boolean(media.url && failedExerciseMedia === `${selectedExercise.id}:${media.url}`);
+                      const externalUrl = media.externalUrl || media.url;
+                      if (media.url && !mediaFailed && media.type === 'video' && isVideoMedia(media.url)) {
+                        return <video className="max-h-[420px] w-full bg-black object-contain" src={media.url} controls playsInline onError={() => setFailedExerciseMedia(`${selectedExercise.id}:${media.url}`)} />;
                       }
-                      if (mediaUrl && isImageMedia(mediaUrl)) {
-                        return <img className="aspect-video w-full object-cover" src={mediaUrl} alt={`Demonstração de ${selectedExercise.name || 'exercício'}`} />;
+                      if (media.url && !mediaFailed && (media.type === 'gif' || media.type === 'image' || isImageMedia(media.url))) {
+                        return <img className="max-h-[420px] w-full object-contain" src={media.url} alt={`Demonstracao de ${selectedExercise.name || 'exercicio'}`} onError={() => setFailedExerciseMedia(`${selectedExercise.id}:${media.url}`)} />;
+                      }
+                      if (media.url && !mediaFailed && media.type === 'video' && !isVideoMedia(media.url)) {
+                        return (
+                          <div className="grid min-h-52 place-items-center p-6 text-center">
+                            <div>
+                              <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-fitblue/30 bg-fitblue/10 text-3xl">🎥</div>
+                              <p className="mt-4 text-xl font-black text-white">Video externo do exercicio</p>
+                              <p className="mt-2 text-sm leading-6 text-slate-300">Este link nao e um video direto para tocar dentro do app.</p>
+                              <a className="btn-primary mt-4 w-full sm:w-auto" href={media.url} target="_blank" rel="noopener noreferrer">Abrir video</a>
+                            </div>
+                          </div>
+                        );
+                      }
+                      if (externalUrl && !mediaFailed && media.type === 'external') {
+                        return (
+                          <div className="grid min-h-52 place-items-center p-6 text-center">
+                            <div>
+                              <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-fitblue/30 bg-fitblue/10 text-3xl">🎬</div>
+                              <p className="mt-4 text-xl font-black text-white">Demonstracao externa</p>
+                              <p className="mt-2 text-sm leading-6 text-slate-300">Abra o link cadastrado pelo personal em uma nova aba.</p>
+                              <a className="btn-primary mt-4 w-full sm:w-auto" href={externalUrl} target="_blank" rel="noopener noreferrer">Abrir demonstracao</a>
+                            </div>
+                          </div>
+                        );
+                      }
+                      if (mediaFailed) {
+                        return (
+                          <div className="grid min-h-52 place-items-center p-6 text-center">
+                            <div>
+                              <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-fitorange/30 bg-fitorange/10 text-3xl">⚠️</div>
+                              <p className="mt-4 text-xl font-black text-white">Nao foi possivel carregar a demonstracao.</p>
+                              <p className="mt-2 text-sm leading-6 text-slate-300">Tente abrir o link externo ou peca ao personal para revisar a URL.</p>
+                              {externalUrl && <a className="btn-secondary mt-4 w-full sm:w-auto" href={externalUrl} target="_blank" rel="noopener noreferrer">Abrir demonstracao</a>}
+                            </div>
+                          </div>
+                        );
                       }
                       return (
                         <div className="grid min-h-52 place-items-center p-6 text-center">
                           <div>
                             <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-fitblue/30 bg-fitblue/10 text-3xl">🏋️</div>
-                            <p className="mt-4 text-xl font-black text-white">{selectedExercise.name || 'Exercício'}</p>
-                            <p className="mt-2 text-sm leading-6 text-slate-300">Demonstração visual indisponível no momento.</p>
-                            <p className="mt-1 text-xs font-semibold text-slate-500">Seu personal poderá adicionar imagem ou vídeo futuramente.</p>
-                            {mediaUrl && <a className="btn-secondary mt-4" href={mediaUrl} target="_blank" rel="noopener noreferrer">Ver demonstração</a>}
+                            <p className="mt-4 text-xl font-black text-white">{selectedExercise.name || 'Exercicio'}</p>
+                            <p className="mt-2 text-sm leading-6 text-slate-300">Demonstracao visual indisponivel no momento.</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-500">Seu personal podera adicionar imagem ou video futuramente.</p>
                           </div>
                         </div>
                       );
@@ -6692,7 +6783,7 @@ function StudentWorkout({ data, student, commit }: { data: AppData; student: Stu
                     <button className={exercise.status === 'concluido' ? 'chip-active' : 'chip'} onClick={() => updateWorkout({ ...workout, exercises: safeWorkoutExercises(workout).map((item) => (item.id === exercise.id ? { ...item, status: item.status === 'concluido' ? 'ativo' : 'concluido' } : item)) })}>{exercise.status === 'concluido' ? 'Concluído' : 'Concluir'}</button>
                   </div>
                   <p className="mt-2 text-sm text-slate-300">{exercise.notes}</p>
-                  {exercise.videoUrl && <a className="mt-2 inline-block text-sm text-fitblue" href={exercise.videoUrl} target="_blank">Vídeo explicativo</a>}
+                  {getExerciseMediaUrl(exercise) && <a className="mt-2 inline-block text-sm text-fitblue" href={getExerciseMediaUrl(exercise)} target="_blank" rel="noopener noreferrer">Abrir demonstracao</a>}
                 </div>
               ))
             ) : (
@@ -6866,25 +6957,51 @@ function StudentProfile({ data, student, commit }: { data: AppData; student: Stu
 }
 
 function ExerciseEditor({ exercise, onChange, disabled = false }: { exercise: Exercise; onChange: (exercise: Exercise) => void; disabled?: boolean }) {
+  const mediaFields = [exercise.imageUrl, exercise.videoUrl, exercise.gifUrl, exercise.externalVideoUrl];
+  const hasInvalidMediaUrl = mediaFields.some((value) => Boolean(String(value || '').trim()) && !isValidHttpUrl(value));
   return (
     <div className="rounded-md border border-line bg-ink/40 p-3">
       <div className="grid gap-3 md:grid-cols-4">
-        <Input label="Nome do exercício" value={exercise.name} onChange={(value) => onChange({ ...exercise, name: value })} disabled={disabled} />
+        <Input label="Nome do exercicio" value={exercise.name} onChange={(value) => onChange({ ...exercise, name: value })} disabled={disabled} />
         <Input label="Grupo muscular" value={exercise.muscleGroup} onChange={(value) => onChange({ ...exercise, muscleGroup: value })} disabled={disabled} />
-        <Input label="Séries" value={exercise.sets} onChange={(value) => onChange({ ...exercise, sets: value })} disabled={disabled} />
-        <Input label="Repetições" value={exercise.reps} onChange={(value) => onChange({ ...exercise, reps: value })} disabled={disabled} />
+        <Input label="Series" value={exercise.sets} onChange={(value) => onChange({ ...exercise, sets: value })} disabled={disabled} />
+        <Input label="Repeticoes" value={exercise.reps} onChange={(value) => onChange({ ...exercise, reps: value })} disabled={disabled} />
         <Input label="Carga" value={exercise.load} onChange={(value) => onChange({ ...exercise, load: value })} disabled={disabled} />
         <Input label="Descanso" value={exercise.rest} onChange={(value) => onChange({ ...exercise, rest: value })} disabled={disabled} />
-        <Input label="Vídeo explicativo" value={exercise.videoUrl} onChange={(value) => onChange({ ...exercise, videoUrl: value })} disabled={disabled} />
-        <Select label="Status" value={exercise.status} onChange={(value) => onChange({ ...exercise, status: value as Exercise['status'] })} disabled={disabled} options={[['ativo', 'Ativo'], ['concluido', 'Concluído']]} />
-        <Textarea label="Observações técnicas" value={exercise.notes} onChange={(value) => onChange({ ...exercise, notes: value })} disabled={disabled} />
+        <Select label="Status" value={exercise.status} onChange={(value) => onChange({ ...exercise, status: value as Exercise['status'] })} disabled={disabled} options={[["ativo", "Ativo"], ["concluido", "Concluido"]]} />
+        <Textarea label="Observacoes tecnicas" value={exercise.notes} onChange={(value) => onChange({ ...exercise, notes: value })} disabled={disabled} />
+      </div>
+      <div className="mt-4 rounded-2xl border border-fitblue/25 bg-fitblue/10 p-4">
+        <div className="mb-3">
+          <p className="text-sm font-black text-white">Midia do exercicio</p>
+          <p className="mt-1 text-sm leading-6 text-slate-300">Adicione imagem, GIF, video ou link externo para demonstrar o exercicio ao aluno.</p>
+          <p className="mt-2 inline-flex rounded-full border border-fitgreen/30 bg-fitgreen/10 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-fitgreen">Midia do exercicio ativa</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Input label="URL da imagem" value={exercise.imageUrl ?? ''} onChange={(value) => onChange({ ...exercise, imageUrl: value })} disabled={disabled} placeholder="https://exemplo.com/exercicio.jpg" />
+          <Input label="URL do video" value={exercise.videoUrl} onChange={(value) => onChange({ ...exercise, videoUrl: value })} disabled={disabled} placeholder="https://exemplo.com/exercicio.mp4" />
+          <Input label="URL do GIF" value={exercise.gifUrl ?? ''} onChange={(value) => onChange({ ...exercise, gifUrl: value })} disabled={disabled} placeholder="https://exemplo.com/exercicio.gif" />
+          <Input label="Link externo de demonstracao" value={exercise.externalVideoUrl ?? ''} onChange={(value) => onChange({ ...exercise, externalVideoUrl: value })} disabled={disabled} placeholder="https://youtube.com/..." />
+          <Select
+            label="Tipo de midia principal"
+            value={exercise.mediaType ?? 'auto'}
+            onChange={(value) => onChange({ ...exercise, mediaType: value as Exercise['mediaType'] })}
+            disabled={disabled}
+            options={[["auto", "Automatico"], ["image", "Imagem"], ["video", "Video"], ["gif", "GIF"], ["external", "Link externo"], ["none", "Nenhuma"]]}
+          />
+        </div>
+        {hasInvalidMediaUrl && (
+          <p className="mt-3 rounded-lg border border-fitorange/30 bg-fitorange/10 p-3 text-sm font-semibold text-fitorange">
+            Informe uma URL valida comecando com http:// ou https://
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
 function emptyExercise(): Exercise {
-  return { id: makeId('e'), name: '', muscleGroup: '', sets: '3', reps: '10', load: '', rest: '60s', notes: '', videoUrl: '', status: 'ativo' };
+  return { id: makeId('e'), name: '', muscleGroup: '', sets: '3', reps: '10', load: '', rest: '60s', notes: '', videoUrl: '', imageUrl: '', gifUrl: '', externalVideoUrl: '', mediaType: 'auto', status: 'ativo' };
 }
 
 function StudentSelector({ students, value, onChange }: { students: Student[]; value: string; onChange: (id: string) => void }) {
