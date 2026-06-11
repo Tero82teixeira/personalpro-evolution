@@ -4028,7 +4028,9 @@ function EvolutionView({ data, student, compact = false }: { data: AppData; stud
         <StatCard label="Treinos feitos" value={workoutLogs.length} icon={Dumbbell} accent="green" />
       </div>
       {!compact && <Panel title="Fonte dos dados">
-        <p className="text-sm text-slate-300">{evolutionSummary.source}</p>
+        <div className="rounded-xl border border-fitblue/20 bg-fitblue/10 p-4">
+          <p className="text-sm font-semibold leading-6 text-slate-200">{evolutionSummary.source}</p>
+        </div>
       </Panel>}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Último treino realizado" value={latestWorkoutLog ? `${workoutName(data, latestWorkoutLog.workoutId)} - ${latestWorkoutDateTime.date} ${latestWorkoutDateTime.time}` : 'Sem registros'} icon={Dumbbell} accent="green" />
@@ -5715,7 +5717,7 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
       </div>
 
       <Panel title="💧 Controle de água">
-        <div className="grid gap-4 lg:grid-cols-[1fr_180px_220px] lg:items-center">
+        <div className="water-control-layout">
           <div className="relative overflow-visible rounded-lg">
             {showWaterCelebration && (
               <div className="water-celebration">
@@ -5738,7 +5740,7 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
                 <p className="mt-1 text-base text-slate-300">Sua meta de água para hoje</p>
               </div>
             )}
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="water-summary-grid">
               <InfoBox label="Meta diária" value={formatLiters(todayWater.waterGoal)} />
               <InfoBox label="Consumido hoje" value={formatLiters(todayWater.waterConsumed)} />
               <InfoBox label="Progresso" value={`${waterProgress}%`} />
@@ -5757,7 +5759,7 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
             </p>
             {!canEditWater && <p className="mt-2 text-xs font-semibold text-fitblue">Somente o aluno pode registrar o consumo de água.</p>}
           </div>
-          <div className={`space-y-3 ${hasWaterExtra ? 'rounded-2xl border border-emerald-400/30 bg-emerald-500/5 p-2 shadow-[0_0_28px_rgba(16,185,129,0.16)]' : ''}`}>
+          <div className={`water-bottle-column space-y-3 ${hasWaterExtra ? 'rounded-2xl border border-emerald-400/30 bg-emerald-500/5 p-2 shadow-[0_0_28px_rgba(16,185,129,0.16)]' : ''}`}>
             {hasWaterExtra && (
               <div className="mx-auto w-fit rounded-full border border-emerald-400/40 bg-emerald-500/15 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-emerald-200">
                 🏆 Meta batida
@@ -5799,7 +5801,7 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
             </div>
           </div>
           {canEditWater && (
-            <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
+            <div className="water-action-grid">
               <button className={waterButtonClass('250')} onClick={() => handleWaterChange(0.25, '250')}>💧 +250 ml</button>
               <button className={waterButtonClass('500')} onClick={() => handleWaterChange(0.5, '500')}>💧 +500 ml</button>
               <button className={waterButtonClass('1000')} onClick={() => handleWaterChange(1, '1000')}>💧 +1 litro</button>
@@ -7292,17 +7294,17 @@ function Panel({ title, action, children }: { title: string; action?: React.Reac
 
 function PremiumContentCard({ title, badge, children }: { title: string; badge: string; children: React.ReactNode }) {
   return (
-    <section className="flex min-h-full max-w-full flex-col overflow-hidden rounded-2xl border border-fitblue/25 bg-panel/80 p-4 shadow-[0_20px_50px_rgba(0,0,0,.3)] sm:p-5">
-      <div className="mb-4 flex flex-col gap-3">
-        <div className="flex justify-start">
+    <section className="premium-content-card flex min-h-full max-w-full flex-col overflow-hidden rounded-2xl border border-fitblue/25 bg-panel/80 p-4 shadow-[0_20px_50px_rgba(0,0,0,.3)] sm:p-5">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 sm:order-2 sm:flex sm:justify-end">
           <Badge label={badge} />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 sm:order-1">
           <h2 className="premium-title-clamp text-lg font-black leading-tight tracking-tight text-white sm:text-xl">{title}</h2>
           <div className="mt-2 h-0.5 w-16 rounded-full bg-gradient-to-r from-fitblue to-fitgreen" />
         </div>
       </div>
-      <div className="mt-auto min-w-0">{children}</div>
+      <div className="premium-content-card-body mt-auto min-w-0">{children}</div>
     </section>
   );
 }

@@ -270,7 +270,66 @@
   }
 
   .premium-value-clamp {
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
+  }
+
+  .premium-content-card {
+    min-width: 0;
+  }
+
+  .premium-content-card-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
+  }
+
+  .premium-content-card-body .btn-secondary {
+    margin-top: auto;
+  }
+
+  .water-control-layout {
+    display: grid;
+    gap: 1.1rem;
+    align-items: center;
+  }
+
+  .water-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));
+    gap: 0.75rem;
+  }
+
+  .water-summary-grid > * {
+    min-width: 0;
+  }
+
+  .water-bottle-column {
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .water-action-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+  }
+
+  @media (min-width: 1024px) {
+    .premium-value-clamp {
+      -webkit-line-clamp: 2;
+    }
+
+    .water-control-layout {
+      grid-template-columns: minmax(0, 1fr) minmax(11rem, 13rem) minmax(12rem, 14rem);
+      gap: 1.25rem;
+    }
+
+    .water-action-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   .scrollbar {
