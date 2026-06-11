@@ -618,6 +618,119 @@ function getSubscriptionAccess(subscription: SubscriptionPlan) {
   };
 }
 
+type OnboardingStepId =
+  | 'personal-data'
+  | 'subscription'
+  | 'first-student'
+  | 'first-workout'
+  | 'student-access'
+  | 'student-view'
+  | 'ai-report';
+
+type PersonalOnboardingState = {
+  hidden: boolean;
+  manualDone: Partial<Record<OnboardingStepId, boolean>>;
+};
+
+type PersonalOnboardingStep = {
+  id: OnboardingStepId;
+  title: string;
+  description: string;
+  actionLabel: string;
+  completed: boolean;
+  manual?: boolean;
+};
+
+function onboardingStorageKey(userId: string) {
+  return `personalpro-onboarding-${userId}`;
+}
+
+function normalizeOnboardingState(value?: Partial<PersonalOnboardingState> | null): PersonalOnboardingState {
+  return {
+    hidden: Boolean(value?.hidden),
+    manualDone: value?.manualDone ?? {}
+  };
+}
+
+function loadPersonalOnboardingState(userId: string): PersonalOnboardingState {
+  if (typeof window === 'undefined') return normalizeOnboardingState();
+  try {
+    return normalizeOnboardingState(JSON.parse(localStorage.getItem(onboardingStorageKey(userId)) || 'null'));
+  } catch {
+    return normalizeOnboardingState();
+  }
+}
+
+function savePersonalOnboardingState(userId: string, state: PersonalOnboardingState) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(onboardingStorageKey(userId), JSON.stringify(normalizeOnboardingState(state)));
+}
+
+function buildPersonalOnboardingSteps(
+  data: AppData,
+  subscriptionPlan: SubscriptionPlan,
+  aiUsage: AiUsage,
+  manualDone: Partial<Record<OnboardingStepId, boolean>>
+): PersonalOnboardingStep[] {
+  const settings = data.personalSettings ?? defaultPersonalSettings;
+  const hasPersonalData = Boolean(String(settings.personalName || '').trim() && String(settings.personalWhatsApp || '').replace(/\D/g, '').length >= 8);
+  const hasSubscription = subscriptionPlan.planId === 'admin-test' || subscriptionPlan.status === 'Ativa' || subscriptionPlan.status === 'Em teste';
+  const hasStudentAccess = data.students.some((student) => Boolean(student.profileId)) || data.users.some((user) => user.role === 'student');
+  return [
+    {
+      id: 'personal-data',
+      title: 'Completar dados do Personal',
+      description: 'Essas informações aparecem para seus alunos e ajudam no contato.',
+      actionLabel: 'Ir para configurações',
+      completed: hasPersonalData
+    },
+    {
+      id: 'subscription',
+      title: 'Confirmar plano/assinatura',
+      description: 'Escolha o plano ideal para liberar seus recursos.',
+      actionLabel: 'Ver plano e assinatura',
+      completed: hasSubscription
+    },
+    {
+      id: 'first-student',
+      title: 'Cadastrar primeiro aluno',
+      description: 'Comece adicionando o primeiro aluno ao sistema.',
+      actionLabel: 'Cadastrar aluno',
+      completed: data.students.length > 0
+    },
+    {
+      id: 'first-workout',
+      title: 'Criar primeiro treino',
+      description: 'Monte um treino para liberar a experiência guiada do aluno.',
+      actionLabel: 'Criar treino',
+      completed: data.workouts.length > 0
+    },
+    {
+      id: 'student-access',
+      title: 'Gerar acesso do aluno',
+      description: 'Crie o login para o aluno acessar o app.',
+      actionLabel: 'Ir para Alunos',
+      completed: hasStudentAccess
+    },
+    {
+      id: 'student-view',
+      title: 'Testar visão do aluno',
+      description: 'Veja como seu aluno irá usar a Home e o Treino Guiado.',
+      actionLabel: 'Ver orientação',
+      completed: Boolean(manualDone['student-view']),
+      manual: true
+    },
+    {
+      id: 'ai-report',
+      title: 'Gerar primeiro relatório inteligente',
+      description: 'Use IA para gerar uma análise profissional do aluno.',
+      actionLabel: 'Abrir relatório inteligente',
+      completed: aiUsage.used > 0 || Boolean(manualDone['ai-report']),
+      manual: true
+    }
+  ];
+}
+
 function parseSubscriptionPrice(value: string) {
   const normalized = String(value)
     .replace(/[^\d,.-]/g, '')
@@ -1869,6 +1982,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
   const [subscriptionPlan, setSubscriptionPlan] = useState<SubscriptionPlan>(() => loadSubscriptionPlan(user.id));
   const [aiUsage, setAiUsage] = useState<AiUsage>(() => applySubscriptionToAiUsage(loadAiUsage(user.id), loadSubscriptionPlan(user.id)));
   const [subscriptionSource, setSubscriptionSource] = useState<'Manual/local' | 'Supabase'>('Manual/local');
+  const [onboardingOpenRequest, setOnboardingOpenRequest] = useState(0);
   const selectedStudent = data.students.find((student) => student.id === selectedStudentId);
   const handleSelectStudent = (studentId: string) => {
     setSelectedStudentId(studentId);
@@ -1922,6 +2036,12 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
     setMenuOpen(false);
     scrollToTop();
   };
+  const reopenOnboarding = () => {
+    const current = loadPersonalOnboardingState(user.id);
+    savePersonalOnboardingState(user.id, { ...current, hidden: false });
+    setOnboardingOpenRequest((value) => value + 1);
+    selectTab('dashboard');
+  };
   useEffect(() => {
     syncSupabaseSubscription(false);
   }, [user.id]);
@@ -1943,7 +2063,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
       </nav>
       <section className="min-w-0">
         {data.students.length > 0 && <StudentSelector students={data.students} value={selectedStudentId} onChange={handleSelectStudent} />}
-        {tab === 'dashboard' && <AdminDashboard data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} aiUsage={aiUsage} subscriptionPlan={subscriptionPlan} onAiUsageIncrement={registerAiUsage} />}
+        {tab === 'dashboard' && <AdminDashboard data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} aiUsage={aiUsage} subscriptionPlan={subscriptionPlan} onAiUsageIncrement={registerAiUsage} onNavigate={selectTab} onboardingOpenRequest={onboardingOpenRequest} />}
         {tab === 'students' && <StudentCrud data={data} selectedStudentId={selectedStudentId} selectedStudent={selectedStudent} onSelect={handleSelectStudent} commit={commit} subscriptionPlan={subscriptionPlan} onOpenPlans={() => selectTab('settings')} />}
         {tab === 'assessments' && selectedStudent && <Assessments data={data} student={selectedStudent} commit={commit} />}
         {tab === 'anamnesis' && selectedStudent && <AnamnesisView data={data} student={selectedStudent} commit={commit} />}
@@ -1959,7 +2079,7 @@ function AdminArea({ user, data, commit }: { user: User; data: AppData; commit: 
         {tab === 'finance' && <FinanceView data={data} student={selectedStudent} commit={commit} />}
         {tab === 'messages' && <MessagesView data={data} />}
         {tab === 'marketing' && <MarketingView data={data} />}
-        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} subscriptionPlan={subscriptionPlan} aiUsage={aiUsage} subscriptionSource={subscriptionSource} onRefreshPaymentStatus={() => syncSupabaseSubscription(true)} onSubscriptionChange={updateSubscriptionPlan} onManualSubscriptionSave={updateManualSubscription} />}
+        {tab === 'settings' && <PersonalSettingsView data={data} commit={commit} subscriptionPlan={subscriptionPlan} aiUsage={aiUsage} subscriptionSource={subscriptionSource} onRefreshPaymentStatus={() => syncSupabaseSubscription(true)} onSubscriptionChange={updateSubscriptionPlan} onManualSubscriptionSave={updateManualSubscription} onShowOnboarding={reopenOnboarding} />}
         {tab !== 'dashboard' && data.students.length === 0 && ['assessments', 'anamnesis', 'workouts', 'periodization', 'journey', 'evolution'].includes(tab) && (
           <Empty title="Base limpa" text="Cadastre um aluno para usar este módulo." />
         )}
@@ -2028,7 +2148,9 @@ function AdminDashboard({
   selectedStudent,
   aiUsage,
   subscriptionPlan,
-  onAiUsageIncrement
+  onAiUsageIncrement,
+  onNavigate,
+  onboardingOpenRequest = 0
 }: {
   data: AppData;
   selectedStudentId: string;
@@ -2036,10 +2158,14 @@ function AdminDashboard({
   aiUsage: AiUsage;
   subscriptionPlan: SubscriptionPlan;
   onAiUsageIncrement: () => void;
+  onNavigate: (tab: AdminTab) => void;
+  onboardingOpenRequest?: number;
 }) {
   const [showStudentSummary, setShowStudentSummary] = useState(false);
   const [showWorkoutHistory, setShowWorkoutHistory] = useState(false);
   const [showSmartReport, setShowSmartReport] = useState(false);
+  const [showOnboardingPanel, setShowOnboardingPanel] = useState(false);
+  const [onboardingState, setOnboardingState] = useState<PersonalOnboardingState>(() => loadPersonalOnboardingState(subscriptionPlan.userId));
   const { goals: dashboardWeeklyGoals } = useWeeklyGoalsStore();
   const [workoutHistoryFilter, setWorkoutHistoryFilter] = useState<'today' | 'week' | 'month' | 'date' | ''>('');
   const [workoutHistoryDate, setWorkoutHistoryDate] = useState('');
@@ -2132,6 +2258,74 @@ function AdminDashboard({
       return { student, latestLog, inactiveDays };
     })
     .filter((item) => item.inactiveDays > 7);
+  const onboardingSteps = buildPersonalOnboardingSteps(data, subscriptionPlan, aiUsage, onboardingState.manualDone);
+  const completedOnboardingSteps = onboardingSteps.filter((step) => step.completed).length;
+  const onboardingProgress = Math.round((completedOnboardingSteps / onboardingSteps.length) * 100);
+  const nextOnboardingStep = onboardingSteps.find((step) => !step.completed);
+  const onboardingComplete = completedOnboardingSteps === onboardingSteps.length;
+  const showOnboardingCard = !onboardingState.hidden || !onboardingComplete;
+  const saveOnboarding = (nextState: PersonalOnboardingState) => {
+    const normalized = normalizeOnboardingState(nextState);
+    savePersonalOnboardingState(subscriptionPlan.userId, normalized);
+    setOnboardingState(normalized);
+  };
+  const updateOnboardingState = (patch: Partial<PersonalOnboardingState>) => {
+    saveOnboarding({
+      ...onboardingState,
+      ...patch,
+      manualDone: {
+        ...onboardingState.manualDone,
+        ...(patch.manualDone ?? {})
+      }
+    });
+  };
+  const markOnboardingStepDone = (stepId: OnboardingStepId) => {
+    updateOnboardingState({ manualDone: { [stepId]: true } });
+  };
+  const hideOnboarding = () => {
+    updateOnboardingState({ hidden: true });
+    setShowOnboardingPanel(false);
+  };
+  const runOnboardingAction = (step: PersonalOnboardingStep) => {
+    if (step.id === 'personal-data' || step.id === 'subscription') {
+      setShowOnboardingPanel(false);
+      onNavigate('settings');
+      return;
+    }
+    if (step.id === 'first-student' || step.id === 'student-access') {
+      setShowOnboardingPanel(false);
+      onNavigate('students');
+      return;
+    }
+    if (step.id === 'first-workout') {
+      setShowOnboardingPanel(false);
+      onNavigate('workouts');
+      return;
+    }
+    if (step.id === 'student-view') {
+      window.alert('Entre com o acesso de um aluno para testar a visao do aluno. Depois marque este passo como feito.');
+      return;
+    }
+    if (step.id === 'ai-report') {
+      if (!currentStudent || !smartReport) {
+        window.alert('Selecione um aluno no Dashboard para visualizar o Relatorio Inteligente.');
+        return;
+      }
+      setShowSmartReport(true);
+      setShowOnboardingPanel(false);
+    }
+  };
+  useEffect(() => {
+    setOnboardingState(loadPersonalOnboardingState(subscriptionPlan.userId));
+  }, [subscriptionPlan.userId]);
+  useEffect(() => {
+    if (!onboardingOpenRequest) return;
+    const current = loadPersonalOnboardingState(subscriptionPlan.userId);
+    const next = normalizeOnboardingState({ ...current, hidden: false });
+    savePersonalOnboardingState(subscriptionPlan.userId, next);
+    setOnboardingState(next);
+    setShowOnboardingPanel(true);
+  }, [onboardingOpenRequest, subscriptionPlan.userId]);
   useEffect(() => {
     setShowStudentSummary(false);
     setShowWorkoutHistory(false);
@@ -2144,6 +2338,91 @@ function AdminDashboard({
     <div className="admin-dashboard">
     <Stack>
       <PageTitle title="Dashboard" subtitle="Visão rápida da operação, evolução e pendências dos alunos." />
+      {showOnboardingCard && (
+        <section className="rounded-2xl border border-fitblue/30 bg-[linear-gradient(135deg,rgba(14,165,233,.14),rgba(34,197,94,.08),rgba(13,23,38,.94))] p-4 shadow-[0_22px_60px_rgba(14,165,233,.14)] sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-black uppercase tracking-[0.16em] text-fitgreen">🚀 Comece por aqui</p>
+              <h2 className="mt-2 text-2xl font-black leading-tight text-white sm:text-3xl">Configuracao inicial do Personal</h2>
+              <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-slate-300 sm:text-base">Configure seu sistema em poucos passos.</p>
+            </div>
+            <div className="rounded-2xl border border-fitgreen/30 bg-fitgreen/10 px-4 py-3 text-left lg:text-right">
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-fitgreen">Progresso</p>
+              <p className="mt-1 text-2xl font-black text-white">{completedOnboardingSteps}/{onboardingSteps.length}</p>
+            </div>
+          </div>
+          <div className="mt-5 h-3 overflow-hidden rounded-full bg-ink/70">
+            <div className="h-full rounded-full bg-gradient-to-r from-fitblue via-cyan-300 to-fitgreen transition-all" style={{ width: `${onboardingProgress}%` }} />
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <InfoBox label="Checklist" value={`${onboardingProgress}% configurado`} />
+            <InfoBox label="Proximo passo" value={nextOnboardingStep?.title ?? 'Sistema configurado'} />
+            <InfoBox label="Status" value={onboardingComplete ? 'Sistema configurado com sucesso.' : 'Configuracao em andamento'} />
+          </div>
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <button className="btn-primary w-full sm:w-auto" onClick={() => setShowOnboardingPanel(true)}>
+              {onboardingComplete ? 'Ver checklist' : 'Continuar configuracao'}
+            </button>
+            {onboardingComplete && (
+              <button className="btn-secondary w-full sm:w-auto" onClick={hideOnboarding}>Ocultar checklist</button>
+            )}
+          </div>
+        </section>
+      )}
+
+      {showOnboardingPanel && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/80 p-3 backdrop-blur-sm sm:items-center">
+          <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-fitblue/30 bg-slate-950 p-4 shadow-[0_28px_90px_rgba(0,0,0,.55)] sm:p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-fitgreen">Onboarding inicial</p>
+                <h3 className="mt-1 text-2xl font-black text-white">🚀 Comece por aqui</h3>
+                <p className="mt-1 text-sm font-semibold text-slate-300">Siga os passos essenciais para deixar o PersonalPro pronto para uso.</p>
+              </div>
+              <button className="btn-secondary shrink-0" onClick={() => setShowOnboardingPanel(false)}>Fechar</button>
+            </div>
+            <div className="mt-4 h-3 overflow-hidden rounded-full bg-ink/70">
+              <div className="h-full rounded-full bg-gradient-to-r from-fitblue via-cyan-300 to-fitgreen transition-all" style={{ width: `${onboardingProgress}%` }} />
+            </div>
+            <p className="mt-2 text-sm font-black text-slate-200">{completedOnboardingSteps}/{onboardingSteps.length} passos concluidos</p>
+            <div className="mt-5 grid gap-3">
+              {onboardingSteps.map((step, index) => (
+                <div key={step.id} className={`rounded-2xl border p-4 ${step.completed ? 'border-fitgreen/35 bg-fitgreen/10' : 'border-line bg-panel/70'}`}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-w-0 gap-3">
+                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-sm font-black ${step.completed ? 'border-fitgreen/50 bg-fitgreen/15 text-fitgreen' : 'border-fitblue/40 bg-fitblue/10 text-fitblue'}`}>
+                        {step.completed ? '✓' : index + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="break-words text-base font-black text-white">{step.title}</p>
+                        <p className="mt-1 text-sm font-semibold leading-6 text-slate-300">{step.description}</p>
+                      </div>
+                    </div>
+                    <span className={`w-fit rounded-full border px-3 py-1 text-xs font-black ${step.completed ? 'border-fitgreen/40 bg-fitgreen/10 text-fitgreen' : 'border-fitorange/40 bg-fitorange/10 text-fitorange'}`}>
+                      {step.completed ? 'Concluido' : 'Pendente'}
+                    </span>
+                  </div>
+                  <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                    <button className={step.completed ? 'btn-secondary w-full sm:w-auto' : 'btn-primary w-full sm:w-auto'} onClick={() => runOnboardingAction(step)}>
+                      {step.actionLabel}
+                    </button>
+                    {step.manual && !step.completed && (
+                      <button className="btn-secondary w-full sm:w-auto" onClick={() => markOnboardingStepDone(step.id)}>Marcar como feito</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {onboardingComplete && (
+              <div className="mt-5 rounded-2xl border border-fitgreen/35 bg-fitgreen/10 p-4">
+                <p className="text-lg font-black text-white">Sistema configurado com sucesso.</p>
+                <p className="mt-1 text-sm font-semibold text-slate-300">Voce pode ocultar este checklist e reabrir depois em Configuracoes.</p>
+                <button className="btn-secondary mt-3 w-full sm:w-auto" onClick={hideOnboarding}>Ocultar checklist</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <Panel title="Resumo geral da operação">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
@@ -4198,7 +4477,8 @@ function PersonalSettingsView({
   subscriptionSource,
   onRefreshPaymentStatus,
   onSubscriptionChange,
-  onManualSubscriptionSave
+  onManualSubscriptionSave,
+  onShowOnboarding
 }: {
   data: AppData;
   commit: (data: AppData, message?: string) => void;
@@ -4208,6 +4488,7 @@ function PersonalSettingsView({
   onRefreshPaymentStatus: () => Promise<boolean>;
   onSubscriptionChange: (planId: AiPlanId) => void;
   onManualSubscriptionSave: (subscription: SubscriptionPlan) => void;
+  onShowOnboarding: () => void;
 }) {
   const rawSettings = data.personalSettings ?? defaultPersonalSettings;
   const currentSettings = {
@@ -4503,6 +4784,14 @@ function PersonalSettingsView({
   return (
     <Stack>
       <PageTitle title="⚙️ Configurações do Personal" subtitle="Personalize seus dados profissionais e informações de contato." />
+      <Panel title="Checklist inicial">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-6 text-slate-300">Reabra o guia inicial do sistema para revisar os primeiros passos de configuracao do PersonalPro.</p>
+          </div>
+          <button className="btn-secondary w-full sm:w-auto" onClick={onShowOnboarding}>Ver checklist inicial</button>
+        </div>
+      </Panel>
       <Panel title="💎 Plano e Assinatura">
         <div className="grid gap-3 lg:grid-cols-[1fr_.9fr]">
           <div className="rounded-xl border border-fitblue/30 bg-fitblue/10 p-4">
