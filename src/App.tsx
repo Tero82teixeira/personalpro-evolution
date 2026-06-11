@@ -4852,11 +4852,11 @@ function MessagesView({ data }: { data: AppData }) {
       <PageTitle title="Comunicação e mensagens" subtitle="Modelos prontos para WhatsApp e acompanhamento." />
       <div className="grid gap-3 lg:grid-cols-3">
         {messages.map((message) => (
-          <Panel key={message.id} title={message.title} action={<Badge label={message.type} />}>
+          <PremiumContentCard key={message.id} title={message.title} badge={message.type}>
             <p className="text-sm leading-6 text-slate-300">{message.content}</p>
             <button className="btn-secondary mt-4 w-full" onClick={() => copyMessage(message)}>Copiar mensagem</button>
             {copiedId === message.id && <p className="mt-2 text-sm font-semibold text-fitgreen">Mensagem copiada.</p>}
-          </Panel>
+          </PremiumContentCard>
         ))}
       </div>
     </Stack>
@@ -4879,11 +4879,11 @@ function MarketingView({ data }: { data: AppData }) {
       <PageTitle title="Marketing para o personal" subtitle="Ideias de conteúdo, chamadas, ofertas e mensagens." />
       <div className="grid gap-3 lg:grid-cols-3">
         {ideas.map((idea) => (
-          <Panel key={idea.id} title={idea.title} action={<Badge label={idea.category} />}>
+          <PremiumContentCard key={idea.id} title={idea.title} badge={idea.category}>
             <p className="text-sm leading-6 text-slate-300">{idea.content}</p>
             <button className="btn-secondary mt-4 w-full" onClick={() => copyIdea(idea)}>Copiar ideia</button>
             {copiedId === idea.id && <p className="mt-2 text-sm font-semibold text-fitgreen">Ideia copiada.</p>}
-          </Panel>
+          </PremiumContentCard>
         ))}
       </div>
     </Stack>
@@ -5733,12 +5733,12 @@ function JourneyView({ data, student, canEditWater = false }: { data: AppData; s
             )}
             {canEditWater && (
               <div className="mb-4 rounded-xl border border-fitblue/40 bg-fitblue/10 p-4 shadow-[0_0_24px_rgba(56,189,248,0.14)]">
-                <p className="text-sm font-black uppercase tracking-[0.14em] text-fitblue">🎯 Meta diária de hidratação</p>
-                <p className="mt-2 text-3xl font-black text-white">{formatLiters(todayWater.waterGoal)}</p>
+                <p className="text-xs font-black uppercase leading-snug tracking-[0.07em] text-fitblue sm:text-sm">🎯 Meta diária de hidratação</p>
+                <p className="mt-2 text-2xl font-black leading-tight text-white sm:text-3xl">{formatLiters(todayWater.waterGoal)}</p>
                 <p className="mt-1 text-base text-slate-300">Sua meta de água para hoje</p>
               </div>
             )}
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-3">
               <InfoBox label="Meta diária" value={formatLiters(todayWater.waterGoal)} />
               <InfoBox label="Consumido hoje" value={formatLiters(todayWater.waterConsumed)} />
               <InfoBox label="Progresso" value={`${waterProgress}%`} />
@@ -7290,17 +7290,34 @@ function Panel({ title, action, children }: { title: string; action?: React.Reac
   );
 }
 
+function PremiumContentCard({ title, badge, children }: { title: string; badge: string; children: React.ReactNode }) {
+  return (
+    <section className="flex min-h-full max-w-full flex-col overflow-hidden rounded-2xl border border-fitblue/25 bg-panel/80 p-4 shadow-[0_20px_50px_rgba(0,0,0,.3)] sm:p-5">
+      <div className="mb-4 flex flex-col gap-3">
+        <div className="flex justify-start">
+          <Badge label={badge} />
+        </div>
+        <div className="min-w-0">
+          <h2 className="premium-title-clamp text-lg font-black leading-tight tracking-tight text-white sm:text-xl">{title}</h2>
+          <div className="mt-2 h-0.5 w-16 rounded-full bg-gradient-to-r from-fitblue to-fitgreen" />
+        </div>
+      </div>
+      <div className="mt-auto min-w-0">{children}</div>
+    </section>
+  );
+}
+
 function StatCard({ label, value, icon: Icon, accent }: { label: string; value: string | number; icon: IconComponent; accent: 'blue' | 'orange' | 'green' }) {
   const color = accent === 'blue' ? 'text-fitblue' : accent === 'orange' ? 'text-fitorange' : 'text-fitgreen';
   return (
-    <div className="rounded-2xl border border-fitblue/25 bg-[linear-gradient(135deg,rgba(15,23,42,.84),rgba(8,47,73,.42))] p-4 shadow-[0_18px_48px_rgba(0,0,0,.32)] sm:p-5">
+    <div className="flex min-h-[8.5rem] flex-col rounded-2xl border border-fitblue/25 bg-[linear-gradient(135deg,rgba(15,23,42,.84),rgba(8,47,73,.42))] p-4 shadow-[0_18px_48px_rgba(0,0,0,.32)] sm:p-5">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-bold leading-snug text-slate-300 sm:text-base">{label}</p>
-        <div className="grid h-10 w-10 place-items-center rounded-xl border border-fitblue/25 bg-fitblue/10 shadow-[0_0_26px_rgba(58,183,255,.16)] sm:h-11 sm:w-11">
+        <p className="min-w-0 break-words text-sm font-bold leading-snug text-slate-300 sm:text-base">{label}</p>
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-fitblue/25 bg-fitblue/10 shadow-[0_0_26px_rgba(58,183,255,.16)] sm:h-11 sm:w-11">
           <Icon className={color} size={22} />
         </div>
       </div>
-      <p className="mt-3 break-words text-[clamp(1.65rem,4vw,2.35rem)] font-black leading-tight text-white">{value}</p>
+      <p className="premium-value-clamp mt-3 break-words text-[clamp(1.35rem,3.2vw,2.15rem)] font-black leading-tight text-white">{value}</p>
     </div>
   );
 }

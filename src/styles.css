@@ -256,6 +256,23 @@
     box-shadow: 0 0 22px rgba(53, 230, 140, 0.18);
   }
 
+  .premium-title-clamp,
+  .premium-value-clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  .premium-title-clamp {
+    -webkit-line-clamp: 2;
+  }
+
+  .premium-value-clamp {
+    -webkit-line-clamp: 2;
+  }
+
   .scrollbar {
     scrollbar-width: thin;
     scrollbar-color: #1d2b3d transparent;
